@@ -21,13 +21,13 @@
             <li><strong>Tacks</strong></li>
         </ul>
         <ul>
-            <li><a id="nav-issues" href="/tasks" hx-get="/tasks" hx-target="#main" hx-select="#main" hx-swap="outerHTML scroll:top" hx-push-url="true">Issues</a></li>
-            <li><a id="nav-board" href="/board" hx-get="/board" hx-target="#main" hx-select="#main" hx-swap="outerHTML scroll:top" hx-push-url="true">Board</a></li>
-            <li><a id="nav-epics" href="/epics" hx-get="/epics" hx-target="#main" hx-select="#main" hx-swap="outerHTML scroll:top" hx-push-url="true">Epics</a></li>
+            <li><a id="nav-issues" href="{{ layout.prefix }}/tasks" hx-get="{{ layout.prefix }}/tasks" hx-target="#main" hx-select="#main" hx-swap="outerHTML scroll:top" hx-push-url="true">Issues</a></li>
+            <li><a id="nav-board" href="{{ layout.prefix }}/board" hx-get="{{ layout.prefix }}/board" hx-target="#main" hx-select="#main" hx-swap="outerHTML scroll:top" hx-push-url="true">Board</a></li>
+            <li><a id="nav-epics" href="{{ layout.prefix }}/epics" hx-get="{{ layout.prefix }}/epics" hx-target="#main" hx-select="#main" hx-swap="outerHTML scroll:top" hx-push-url="true">Epics</a></li>
             <li>
                 <button class="outline new-issue-btn"
                     data-shortcut="n"
-                    hx-get="/tasks/new/modal"
+                    hx-get="{{ layout.prefix }}/tasks/new/modal"
                     hx-target="#task-modal"
                     hx-swap="innerHTML"
                     hx-on:htmx:after-swap="document.getElementById('task-modal').showModal()">
@@ -44,9 +44,14 @@
             </li>
         </ul>
     </nav>
-    <main class="container" id="main">
-        {% block content %}{% endblock %}
-    </main>
+    <div class="app-layout">
+        {% if let Some(sb) = layout.sidebar.as_ref() %}
+        {% include "partials/sidebar.html" %}
+        {% endif %}
+        <main class="container" id="main">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
     <dialog id="task-modal"></dialog>
     <div id="toast-container" role="status" aria-live="polite" aria-atomic="false"></div>
 </body>

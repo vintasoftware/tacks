@@ -20,6 +20,7 @@ pub struct AppState {
 
 pub mod errors;
 mod handlers;
+pub mod scope;
 
 /// Render a markdown string to an HTML string.
 ///
@@ -104,22 +105,41 @@ async fn static_handler(AxumPath(path): AxumPath<String>) -> Response {
     }
 }
 
-/// Build the axum router with all routes.
-pub fn create_router(state: AppState) -> Router {
-    Router::new()
-        // HTML routes — specific routes before parameterized ones
-        .route("/", get(handlers::index))
-        .route("/tasks/new", get(handlers::task_new))
-        .route("/tasks/new/modal", get(handlers::task_create_modal))
-        .route("/tasks/{id}/dep-tree", get(handlers::task_dep_tree))
-        .route("/tasks/{id}", get(handlers::task_detail))
+/// Register the scope-aware HTML views under `prefix`: `""` (all projects),
+/// `"/p/{project_id}"` (one project) and `"/p/{project_id}/w/{workspace_id}"` (one
+/// workspace). The same handlers serve all three; the `Scope` extractor reads the
+/// path parameters. Specific routes come before parameterized ones.
+fn add_scoped_routes(router: Router<AppState>, prefix: &str) -> Router<AppState> {
+    router
+        .route(&format!("{prefix}/tasks/new"), get(handlers::task_new))
         .route(
-            "/tasks",
+            &format!("{prefix}/tasks/new/modal"),
+            get(handlers::task_create_modal),
+        )
+        .route(
+            &format!("{prefix}/tasks"),
             get(handlers::task_list).post(handlers::task_create_form),
         )
-        .route("/board", get(handlers::board))
-        .route("/epics", get(handlers::epics))
-        .route("/epics/{id}", get(handlers::epic_detail))
+        .route(&format!("{prefix}/board"), get(handlers::board))
+        .route(&format!("{prefix}/epics"), get(handlers::epics))
+        .route(
+            &format!("{prefix}/epics/{{id}}"),
+            get(handlers::epic_detail),
+        )
+}
+
+/// Build the axum router with all routes.
+pub fn create_router(state: AppState) -> Router {
+    let router = Router::new()
+        // HTML routes — specific routes before parameterized ones
+        .route("/", get(handlers::index));
+    let router = add_scoped_routes(router, "");
+    let router = add_scoped_routes(router, "/p/{project_id}");
+    let router = add_scoped_routes(router, "/p/{project_id}/w/{workspace_id}");
+    router
+        // Task detail and dep trees stay global (any task, whatever the scope)
+        .route("/tasks/{id}/dep-tree", get(handlers::task_dep_tree))
+        .route("/tasks/{id}", get(handlers::task_detail))
         .route("/epics/{id}/dep-tree", get(handlers::epic_dep_tree))
         .route("/static/{*path}", get(static_handler))
         // API routes — specific routes before parameterized ones
@@ -131,6 +151,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tasks/blocked", get(handlers::api_blocked_tasks))
         .route("/api/tags", get(handlers::api_tags))
         .route("/api/epics", get(handlers::api_epics))
+        .route("/api/workspaces", get(handlers::api_workspaces))
         .route("/api/prime", get(handlers::api_prime))
         .route(
             "/api/tasks/{id}",

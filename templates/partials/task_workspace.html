@@ -1,0 +1,22 @@
+<div class="task-workspace" data-task-id="{{ task.id }}">
+  <span class="meta-label">Workspace</span>
+  {% if let Some(w) = ws.as_ref() %}
+  <span class="badge ws-badge{% if w.missing %} ws-missing{% endif %}">{{ w.name }}{% if w.missing %} · missing{% endif %}</span>
+  <span class="ws-path">{{ w.path }}</span>
+  <span class="meta-label">Project</span> <span class="ws-project">{{ w.project_name }}</span>
+  {% if w.missing %}<span class="ws-missing-note">This workspace's path no longer exists. The task stays in its project; move it to another workspace if needed.</span>{% endif %}
+  {% else %}
+  <span class="ws-none">none</span>
+  {% endif %}
+  <select class="workspace-move-select" data-task-id="{{ task.id }}" aria-label="Move to workspace">
+    <option value=""{% if ws.is_none() %} selected{% endif %}>none (unscoped)</option>
+    {% for g in ws_groups.iter() %}
+    <optgroup label="{{ g.project_name }}">
+      {% for o in g.options.iter() %}
+      <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.name }}{% if o.missing %} (missing){% endif %}</option>
+      {% endfor %}
+    </optgroup>
+    {% endfor %}
+  </select>
+  <small class="ws-move-hint">Changing the workspace moves this task and all of its subtasks.</small>
+</div>

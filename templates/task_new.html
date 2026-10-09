@@ -5,7 +5,7 @@
 {% block content %}
 <h1>New Task</h1>
 
-<form method="post" action="/tasks">
+<form method="post" action="{{ prefix }}/tasks">
   <label for="title">title
     <input type="text" id="title" name="title" placeholder="Task title" required>
   </label>
@@ -18,6 +18,18 @@
   </label>
   <label for="description">description
     <textarea id="description" name="description" placeholder="Task description (optional)"></textarea>
+  </label>
+  <label for="workspace_id">workspace
+    <select id="workspace_id" name="workspace_id">
+      <option value=""{% if default_workspace.is_none() %} selected{% endif %}>none (unscoped)</option>
+      {% for g in ws_groups.iter() %}
+      <optgroup label="{{ g.project_name }}">
+        {% for o in g.options.iter() %}
+        <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}>{{ o.name }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
   </label>
   <button type="submit">Create Task</button>
 </form>

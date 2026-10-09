@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% import "macros.html" as m %}
 
 {% block title %}Epics — Tacks{% endblock %}
 
 {% block content %}
 <div id="content-area"
-     hx-get="/epics{{ poll_query }}"
+     hx-get="{{ layout.prefix }}/epics{{ poll_query }}"
      hx-trigger="every 2s [document.visibilityState === 'visible']"
      hx-target="this"
      hx-select="#content-area"
@@ -12,8 +13,8 @@
      aria-live="polite"
      aria-atomic="false">
 
-<form method="get" action="/epics"
-      hx-get="/epics"
+<form method="get" action="{{ layout.prefix }}/epics"
+      hx-get="{{ layout.prefix }}/epics"
       hx-trigger="change from:#epics-status-hidden-input, change from:#epics-priority-hidden-input"
       hx-target="#content-area"
       hx-select="#content-area"
@@ -69,8 +70,8 @@
     {% else %}
     {% for ep in epics %}
     <tr>
-      <td><a href="/epics/{{ ep.task.id }}">{{ ep.task.id }}</a></td>
-      <td>{{ ep.task.title }}</td>
+      <td><a href="{{ layout.prefix }}/epics/{{ ep.task.id }}">{{ ep.task.id }}</a></td>
+      <td>{{ ep.task.title }} {% if let Some(ws) = ep.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</td>
       <td><span class="badge status-{{ ep.task.status }}">
         {%- if ep.task.status == crate::models::Status::Open -%}○ Open
         {%- else if ep.task.status == crate::models::Status::InProgress -%}◐ In Progress

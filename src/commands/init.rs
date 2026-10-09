@@ -9,7 +9,6 @@ pub fn run(db_path: &Path, prefix: &str) -> Result<(), String> {
     }
 
     let db = Database::open(db_path)?;
-    db.migrate()?;
     db.set_config("prefix", prefix)?;
     db.set_config("version", env!("CARGO_PKG_VERSION"))?;
 

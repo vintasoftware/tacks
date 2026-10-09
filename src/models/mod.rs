@@ -72,6 +72,27 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
     pub close_reason: Option<String>,
     pub notes: Option<String>,
+    /// Workspace this task belongs to; `None` means the unscoped bucket.
+    pub workspace_id: Option<i64>,
+}
+
+/// A project: a git repository grouping one or more workspaces (worktrees).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A workspace: a single git worktree belonging to a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: i64,
+    pub project_id: i64,
+    pub path: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4,13 +4,13 @@ Tacks has downstream consumers (e.g., Tackline) that depend on its CLI interface
 
 ## What Is Stable
 
-- **CLI commands**: All 16 subcommands (init, create, list, ready, show, update, close, dep, comment, stats, prime, children, epic, blocked) and their flags
-- **JSON output schema**: The Task struct (12 fields), Comment, Dependency, Status enum (open/in_progress/done/blocked), CloseReason values (done/duplicate/absorbed/stale/superseded)
-- **Global flags**: `--json`, `--db`
+- **CLI commands**: All subcommands (init, create, list, ready, show, update, close, dep, comment, stats, prime, children, epic, blocked, workspaces) and their flags
+- **JSON output schema**: The Task struct (13 fields, including nullable workspace_id), the workspace object of show --json (id, name, path, project_id, project_name, missing; or null), Comment, Dependency, Status enum (open/in_progress/done/blocked), CloseReason values (done/duplicate/absorbed/stale/superseded)
+- **Global flags**: `--json`, `--db`, `--workspace`, `--scope` (workspace|project|all)
 - **Exit codes**: 0 for success, 1 for error
 - **ID format**: `tk-XXXX` for tasks, `tk-XXXX.N` for subtasks
-- **Env var**: `TACKS_DB` override for database path
-- **DB schema**: Existing tables (tasks, config, dependencies, comments) and their columns
+- **Env vars**: `TACKS_DB` override for database path, `TACKS_WORKSPACE` explicit workspace path
+- **DB schema**: Existing tables (tasks, config, dependencies, comments, projects, workspaces) and their columns
 
 ## Rules
 

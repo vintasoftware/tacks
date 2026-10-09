@@ -1,0 +1,37 @@
+<aside id="scope-sidebar" class="scope-sidebar" aria-label="Projects and workspaces">
+  <ul class="scope-list">
+    <li>
+      <a class="scope-link scope-all{% if sb.all_active %} scope-active{% endif %}"
+         data-scope-prefix=""
+         href="/{{ layout.view }}"{% if sb.all_active %} aria-current="page"{% endif %}>
+        <span class="scope-name">All</span>
+        <span class="scope-count" title="Tasks not done">{{ sb.all_open }}</span>
+      </a>
+    </li>
+    {% for p in sb.projects.iter() %}
+    <li class="scope-project">
+      <a class="scope-link scope-project-link{% if p.active %} scope-active{% endif %}"
+         data-scope-prefix="/p/{{ p.id }}"
+         href="/p/{{ p.id }}/{{ layout.view }}"{% if p.active %} aria-current="page"{% endif %}>
+        <span class="scope-name">{{ p.name }}</span>
+        <span class="scope-count" title="Tasks not done">{{ p.open }}</span>
+      </a>
+      <ul class="scope-list scope-workspaces">
+        {% for w in p.workspaces.iter() %}
+        <li>
+          <a class="scope-link scope-workspace-link{% if w.active %} scope-active{% endif %}{% if w.missing %} scope-missing{% endif %}"
+             data-scope-prefix="/p/{{ p.id }}/w/{{ w.id }}"
+             href="/p/{{ p.id }}/w/{{ w.id }}/{{ layout.view }}"
+             title="{{ w.path }}{% if w.missing %} (path no longer exists){% endif %}"
+             {%- if w.active %} aria-current="page"{% endif %}>
+            <span class="scope-name">{{ w.name }}</span>
+            {% if w.missing %}<span class="scope-missing-label">missing</span>{% endif %}
+            <span class="scope-count" title="Tasks not done">{{ w.open }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </li>
+    {% endfor %}
+  </ul>
+</aside>

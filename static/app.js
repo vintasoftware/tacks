@@ -70,8 +70,25 @@
 
   // --- Nav active tab highlight ---
 
+  // Scope prefix of the current URL: "", "/p/1" or "/p/1/w/2".
+  var SCOPE_PREFIX_RE = /^\/p\/\d+(?:\/w\/\d+)?(?=\/|$)/;
+
+  function stripScope(path) {
+    return path.replace(SCOPE_PREFIX_RE, '') || '/';
+  }
+
+  // Keep the sidebar's scope links on the view (tasks/board/epics) currently shown.
+  function updateSidebarLinks(path) {
+    var m = stripScope(path).match(/^\/(tasks|board|epics)(?:\/|$)/);
+    if (!m) return;
+    document.querySelectorAll('#scope-sidebar a[data-scope-prefix]').forEach(function (a) {
+      a.setAttribute('href', a.getAttribute('data-scope-prefix') + '/' + m[1]);
+    });
+  }
+
   function initNavActive() {
-    var path = window.location.pathname;
+    var path = stripScope(window.location.pathname);
+    updateSidebarLinks(window.location.pathname);
     // Normalise trailing slash: /tasks/ -> /tasks
     if (path.length > 1 && path.endsWith('/')) {
       path = path.slice(0, -1);
@@ -203,7 +220,7 @@
   }
 
   function currentPath() {
-    return window.location.pathname;
+    return stripScope(window.location.pathname);
   }
 
   // --- Task list navigation ---
@@ -509,6 +526,7 @@
     var tags = form.querySelector('[name="tags"]');
     var assignee = form.querySelector('[name="assignee"]');
     var parentId = form.querySelector('[name="parent_id"]');
+    var workspaceId = form.querySelector('[name="workspace_id"]');
 
     // Parse tags: comma-separated string → array
     var tagsVal = tags && tags.value.trim() ? tags.value.split(',').map(function (t) { return t.trim(); }).filter(Boolean) : null;
@@ -520,7 +538,9 @@
       status: status ? status.value : null,
       tags: tagsVal,
       assignee: assignee && assignee.value.trim() ? assignee.value.trim() : null,
-      parent_id: parentId && parentId.value ? parentId.value : null
+      parent_id: parentId && parentId.value ? parentId.value : null,
+      // Subtasks inherit the parent's workspace server-side; workspace_id is ignored then.
+      workspace_id: workspaceId && workspaceId.value ? parseInt(workspaceId.value, 10) : null
     };
 
     var submitBtn = form.querySelector('[type="submit"]');
@@ -1818,7 +1838,10 @@
     var path = currentPath();
 
     if (key === 'n') {
-      htmx.ajax('GET', '/tasks/new/modal', { target: '#task-modal', swap: 'innerHTML' });
+      // The New Issue button carries the scope-aware modal URL.
+      var newBtn = document.querySelector('.new-issue-btn');
+      var modalUrl = (newBtn && newBtn.getAttribute('hx-get')) || '/tasks/new/modal';
+      htmx.ajax('GET', modalUrl, { target: '#task-modal', swap: 'innerHTML' });
       return;
     }
 
@@ -1948,6 +1971,36 @@
         card.classList.add('drag-error');
         setTimeout(function () { card.classList.remove('drag-error'); }, 700);
         showToast('Failed to move task — status not updated', 'error');
+      });
+  });
+
+  // --- Move task to another workspace (task detail page / modal) ---
+  // PATCH /api/tasks/{id} with workspace_id (integer, or null for "none").
+  // The server moves the task together with all of its subtasks.
+  document.addEventListener('change', function (e) {
+    var sel = e.target;
+    if (!sel || !sel.classList || !sel.classList.contains('workspace-move-select')) return;
+    var taskId = sel.getAttribute('data-task-id');
+    var value = sel.value ? parseInt(sel.value, 10) : null;
+    sel.setAttribute('aria-busy', 'true');
+    fetch('/api/tasks/' + encodeURIComponent(taskId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: value }),
+    })
+      .then(function (r) {
+        sel.removeAttribute('aria-busy');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        showToast('Workspace updated (subtasks moved too)', 'success', 2500);
+        if (sel.closest('dialog')) {
+          htmx.ajax('GET', '/tasks/' + encodeURIComponent(taskId), { target: '#task-modal', swap: 'innerHTML' });
+        } else {
+          window.location.reload();
+        }
+      })
+      .catch(function () {
+        sel.removeAttribute('aria-busy');
+        showToast('Failed to move task', 'error');
       });
   });
 })();

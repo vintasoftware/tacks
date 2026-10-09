@@ -4,7 +4,9 @@ use chrono::Utc;
 
 use crate::db::Database;
 use crate::models::{Status, Task};
+use crate::scope::{self, Scope};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     db_path: &Path,
     title: &str,
@@ -12,17 +14,24 @@ pub fn run(
     description: Option<&str>,
     tags: Option<&str>,
     parent: Option<&str>,
+    scope: &Scope,
     json: bool,
 ) -> Result<(), String> {
     let db = Database::open(db_path)?;
 
-    let id = if let Some(parent_id) = parent {
-        // Verify parent exists
-        db.get_task(parent_id)?
+    let (id, workspace_id) = if let Some(parent_id) = parent {
+        // Verify parent exists; subtasks inherit the parent's workspace
+        let parent_task = db
+            .get_task(parent_id)?
             .ok_or_else(|| format!("parent task not found: {parent_id}"))?;
-        db.generate_child_id(parent_id)?
+        (db.generate_child_id(parent_id)?, parent_task.workspace_id)
     } else {
-        db.generate_id()?
+        // Register the current workspace on first write; unscoped outside a git repo
+        let ws = match scope.resolve()? {
+            Some(r) => Some(scope::register(&db, &r)?.id),
+            None => None,
+        };
+        (db.generate_id()?, ws)
     };
 
     let now = Utc::now();
@@ -48,6 +57,7 @@ pub fn run(
         updated_at: now,
         close_reason: None,
         notes: None,
+        workspace_id,
     };
 
     db.insert_task(&task)?;

@@ -2102,3 +2102,188 @@ a.view-toggle-btn:focus-visible {
   outline: 2px solid var(--pico-primary-focus, rgba(124, 58, 237, 0.375));
   border-radius: 2px;
 }
+
+/* ---- Workspace scoping: sidebar, badges, workspace selector ---- */
+
+.app-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 0 var(--pico-spacing, 1rem);
+}
+
+.app-layout > main.container {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.scope-sidebar {
+  flex: 0 0 14rem;
+  max-width: 14rem;
+  padding-top: var(--pico-block-spacing-vertical, 1rem);
+  font-size: 0.9rem;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.scope-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.scope-list li {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scope-workspaces {
+  margin-left: 0.9rem;
+  border-left: 1px solid var(--pico-muted-border-color, #d1d5db);
+}
+
+.scope-project {
+  margin-top: 0.5rem;
+}
+
+.scope-link {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--pico-border-radius, 0.25rem);
+  text-decoration: none;
+  color: var(--pico-muted-color, #6b7280);
+}
+
+.scope-link:hover {
+  color: var(--pico-color, inherit);
+  background: var(--pico-muted-border-color, rgba(128, 128, 128, 0.15));
+}
+
+.scope-link.scope-active {
+  color: var(--pico-primary, #7c3aed);
+  font-weight: 600;
+  background: rgba(124, 58, 237, 0.12);
+}
+
+.scope-project-link {
+  font-weight: 600;
+}
+
+.scope-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-count {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color, #6b7280);
+}
+
+.scope-link.scope-missing .scope-name {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.scope-missing-label,
+.ws-missing-note {
+  font-size: 0.7rem;
+  color: var(--pico-del-color, #b91c1c);
+}
+
+.ws-badge {
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--pico-muted-border-color, #d1d5db);
+  color: var(--pico-muted-color, #6b7280);
+  background: transparent;
+}
+
+.ws-badge.ws-missing {
+  border-style: dashed;
+  border-color: var(--pico-del-color, #b91c1c);
+  color: var(--pico-del-color, #b91c1c);
+}
+
+.board-card-ws {
+  margin-top: 0.3em;
+}
+
+.task-workspace {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.task-workspace .ws-path {
+  font-family: var(--pico-font-family-monospace, monospace);
+  font-size: 0.8rem;
+  color: var(--pico-muted-color, #6b7280);
+  overflow-wrap: anywhere;
+}
+
+.task-workspace select.workspace-move-select {
+  width: auto;
+  margin: 0;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+.ws-move-hint {
+  color: var(--pico-muted-color, #6b7280);
+}
+
+@media (max-width: 900px) {
+  .app-layout {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .scope-sidebar {
+    flex: none;
+    max-width: none;
+    width: 100%;
+    position: static;
+    max-height: none;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--pico-muted-border-color, #d1d5db);
+  }
+
+  .scope-sidebar .scope-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+  }
+
+  .scope-project {
+    margin-top: 0;
+  }
+
+  .scope-workspaces {
+    display: flex;
+    flex-wrap: wrap;
+    margin-left: 0;
+    border-left: none;
+  }
+
+  .app-layout > main.container {
+    width: 100%;
+  }
+}

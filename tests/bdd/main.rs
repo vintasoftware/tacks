@@ -36,6 +36,14 @@ pub struct TacksWorld {
     pub last_task_id: Option<String>,
     /// Stored created_at timestamp for datetime-immutability assertions.
     pub stored_created_at: Option<String>,
+    /// Scratch directory holding per-scenario git repos, worktrees and a fake HOME.
+    pub fs_dir: Option<tempfile::TempDir>,
+    /// Directory alias to canonical path (repos, worktrees, plain dirs).
+    pub fs_paths: HashMap<String, PathBuf>,
+    /// Extra environment variables applied to every `tk` run in workspace steps.
+    pub extra_env: Vec<(String, String)>,
+    /// Remembered `updated_at` values keyed by task alias.
+    pub stored_updated_at: HashMap<String, String>,
 }
 
 impl Default for TacksWorld {
@@ -55,6 +63,10 @@ impl Default for TacksWorld {
             last_response_body: None,
             last_task_id: None,
             stored_created_at: None,
+            fs_dir: None,
+            fs_paths: HashMap::new(),
+            extra_env: Vec::new(),
+            stored_updated_at: HashMap::new(),
         }
     }
 }

@@ -18,3 +18,4 @@ pub mod reparenting_steps;
 pub mod task_steps;
 pub mod web_api_steps;
 pub mod web_steps;
+pub mod workspace_steps;

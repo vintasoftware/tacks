@@ -2,16 +2,26 @@ use std::path::Path;
 
 use crate::db::Database;
 use crate::models::Status;
+use crate::scope::Scope;
 
 /// Show epic progress: tasks tagged 'epic' with child completion stats.
 ///
 /// Displays three-part progress counts: done/in_progress/open.
-pub fn run(db_path: &Path, json: bool) -> Result<(), String> {
+pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
     let db = Database::open(db_path)?;
 
     // Get all tasks tagged as epic
     // Always show all epics (including done) since epic progress is the focus
-    let epics = db.list_tasks(true, None, None, Some("epic"), None, None, None)?;
+    let epics = db.list_tasks(
+        true,
+        None,
+        None,
+        Some("epic"),
+        None,
+        None,
+        None,
+        &scope.filter(&db)?,
+    )?;
 
     if json {
         let mut results = Vec::new();

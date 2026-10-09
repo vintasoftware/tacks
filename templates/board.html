@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% import "macros.html" as m %}
 
 {% block title %}Board — Tacks{% endblock %}
 
 {% block content %}
 <div id="content-area">
 
-<form method="get" action="/board"
-      hx-get="/board"
+<form method="get" action="{{ layout.prefix }}/board"
+      hx-get="{{ layout.prefix }}/board"
       hx-trigger="change from:#board-epic-hidden-input, change from:#board-priority-hidden-input, change from:#board-done-since-select"
       hx-target="#content-area"
       hx-select="#content-area"
@@ -56,7 +57,7 @@
 </form>
 
 <div class="grid" id="board-columns"
-     hx-get="/board{{ poll_query }}"
+     hx-get="{{ layout.prefix }}/board{{ poll_query }}"
      hx-trigger="every 2s [document.visibilityState === 'visible']"
      hx-target="#board-columns"
      hx-select="#board-columns"
@@ -77,6 +78,9 @@
           {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
         </span>
       </div>
+      {% if row.workspace.is_some() %}
+      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
+      {% endif %}
       {% if row.blocked_count > 0 %}
       <div class="board-card-blocked">
         <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
@@ -99,6 +103,9 @@
           {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
         </span>
       </div>
+      {% if row.workspace.is_some() %}
+      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
+      {% endif %}
       {% if row.blocked_count > 0 %}
       <div class="board-card-blocked">
         <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
@@ -121,6 +128,9 @@
           {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
         </span>
       </div>
+      {% if row.workspace.is_some() %}
+      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
+      {% endif %}
       {% if row.blocked_count > 0 %}
       <div class="board-card-blocked">
         <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
@@ -147,6 +157,9 @@
           {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
         </span>
       </div>
+      {% if row.workspace.is_some() %}
+      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
+      {% endif %}
       {% if row.blocked_count > 0 %}
       <div class="board-card-blocked">
         <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>

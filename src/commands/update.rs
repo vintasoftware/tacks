@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::db::Database;
+use crate::scope;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -16,6 +17,7 @@ pub fn run(
     remove_tags: Option<&str>,
     notes: Option<&str>,
     parent: Option<&str>,
+    move_to: Option<&str>,
     json: bool,
 ) -> Result<(), String> {
     let db = Database::open(db_path)?;
@@ -41,49 +43,78 @@ pub fn run(
         }
     });
 
-    db.update_task_with_parent(
-        id,
-        title,
-        priority,
-        effective_status,
-        description,
-        effective_assignee,
-        None,
-        notes,
-        new_parent,
-    )?;
+    // Resolve the --move-to target (read-only) before any write; registration of a new
+    // workspace happens inside the transaction below.
+    let move_target: Option<Option<scope::ResolvedWorkspace>> = match move_to {
+        None => None,
+        Some(t) if t.eq_ignore_ascii_case("none") => Some(None),
+        Some(t) => {
+            let cwd = std::env::current_dir()
+                .map_err(|e| format!("cannot determine current directory: {e}"))?;
+            let resolved = scope::resolve(Some(std::path::Path::new(t)), &cwd)?
+                .ok_or_else(|| format!("cannot resolve workspace: {t}"))?;
+            Some(Some(resolved))
+        }
+    };
 
-    // Sync parent epic status if this task's status changed
-    if effective_status.is_some()
-        && let Some(task) = db.get_task(id)?
-        && let Some(ref pid) = task.parent_id
-    {
-        db.sync_epic_status(pid)?;
-    }
+    // Everything below is one transaction: a failing update leaves the task unchanged.
+    // Order: reparent (moves the subtree to the new parent's workspace), then the
+    // explicit --move-to, which therefore wins when both are given.
+    db.with_savepoint(|| {
+        db.update_task_with_parent(
+            id,
+            title,
+            priority,
+            effective_status,
+            description,
+            effective_assignee,
+            None,
+            notes,
+            new_parent,
+        )?;
 
-    // Handle tag changes
-    if add_tags.is_some() || remove_tags.is_some() {
-        let mut current_tags = db.get_task_tags(id)?;
+        // Sync parent epic status if this task's status changed
+        if effective_status.is_some()
+            && let Some(task) = db.get_task(id)?
+            && let Some(ref pid) = task.parent_id
+        {
+            db.sync_epic_status(pid)?;
+        }
 
-        if let Some(add) = add_tags {
-            for tag in add
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-            {
-                if !current_tags.contains(&tag) {
-                    current_tags.push(tag);
+        // Handle tag changes
+        if add_tags.is_some() || remove_tags.is_some() {
+            let mut current_tags = db.get_task_tags(id)?;
+
+            if let Some(add) = add_tags {
+                for tag in add
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                {
+                    if !current_tags.contains(&tag) {
+                        current_tags.push(tag);
+                    }
                 }
             }
+
+            if let Some(remove) = remove_tags {
+                let remove_set: Vec<String> =
+                    remove.split(',').map(|s| s.trim().to_string()).collect();
+                current_tags.retain(|t| !remove_set.contains(t));
+            }
+
+            db.update_tags(id, &current_tags)?;
         }
 
-        if let Some(remove) = remove_tags {
-            let remove_set: Vec<String> = remove.split(',').map(|s| s.trim().to_string()).collect();
-            current_tags.retain(|t| !remove_set.contains(t));
+        if let Some(target) = &move_target {
+            let workspace_id = match target {
+                None => None,
+                Some(resolved) => Some(scope::register(&db, resolved)?.id),
+            };
+            db.set_task_workspace(id, workspace_id)?;
         }
-
-        db.update_tags(id, &current_tags)?;
-    }
+        Ok(())
+    })?;
 
     if json {
         let task = db

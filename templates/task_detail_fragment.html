@@ -32,6 +32,8 @@
     <span class="meta-item"><span class="meta-label">Updated</span> {{ task.updated_at.format("%b %d, %Y %H:%M") }}</span>
   </div>
 
+  {% include "partials/task_workspace.html" %}
+
   {% if let Some(html) = description_html.as_deref() %}
   <div class="task-description markdown-body" data-editable data-field="description" data-task-id="{{ task.id }}">{{ html|safe }}</div>
   {% else %}

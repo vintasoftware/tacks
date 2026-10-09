@@ -1,9 +1,12 @@
 mod commands;
 mod db;
 mod models;
+mod scope;
 pub mod web;
+mod workspace_overview;
 
 use clap::{Parser, Subcommand};
+use scope::{Scope, ScopeMode};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -13,9 +16,17 @@ use std::path::PathBuf;
     about = "Lightweight task manager for AI coding agents"
 )]
 struct Cli {
-    /// Path to the database file (default: .tacks/tacks.db in current dir)
+    /// Path to the database file (default: ~/.tacks/tacks.db)
     #[arg(long, env = "TACKS_DB")]
     db: Option<PathBuf>,
+
+    /// Workspace path to use instead of the current directory's git worktree
+    #[arg(long, global = true, env = "TACKS_WORKSPACE")]
+    workspace: Option<PathBuf>,
+
+    /// Which tasks list-type commands cover: current workspace, whole project, or everything
+    #[arg(long, global = true, value_enum, default_value = "workspace")]
+    scope: ScopeMode,
 
     /// Output as JSON instead of table
     #[arg(long, global = true)]
@@ -27,7 +38,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize tacks in the current directory
+    /// Initialize the tacks database (global by default: ~/.tacks/tacks.db)
     Init {
         /// Task ID prefix (default: "tk")
         #[arg(long, default_value = "tk")]
@@ -121,6 +132,9 @@ enum Commands {
         /// Move task under a parent (reparent). Use "none" to promote to top-level.
         #[arg(long)]
         parent: Option<String>,
+        /// Move the task and its subtasks to another workspace (path, or "none" for unscoped)
+        #[arg(long)]
+        move_to: Option<String>,
     },
     /// Close a task
     Close {
@@ -157,6 +171,8 @@ enum Commands {
     },
     /// Show blocked tasks (tasks with open blockers)
     Blocked,
+    /// List projects and workspaces with task counts
+    Workspaces,
     /// Start the web UI server
     Serve {
         /// Port to listen on
@@ -189,15 +205,31 @@ enum DepAction {
     },
 }
 
+/// Default database location: `$HOME/.tacks/tacks.db`.
+fn default_db_path() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| "HOME is not set; use --db or TACKS_DB to choose a database".to_string())?;
+    let mut p = PathBuf::from(home);
+    p.push(".tacks");
+    p.push("tacks.db");
+    Ok(p)
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    let db_path = cli.db.unwrap_or_else(|| {
-        let mut p = std::env::current_dir().expect("cannot determine current directory");
-        p.push(".tacks");
-        p.push("tacks.db");
-        p
-    });
+    let db_path = match cli.db {
+        Some(p) => p,
+        None => default_db_path().unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }),
+    };
+    let scope = Scope {
+        explicit: cli.workspace,
+        mode: cli.scope,
+    };
 
     let result = match cli.command {
         Commands::Init { prefix } => commands::init::run(&db_path, &prefix),
@@ -214,6 +246,7 @@ fn main() {
             description.as_deref(),
             tags.as_deref(),
             parent.as_deref(),
+            &scope,
             cli.json,
         ),
         Commands::List {
@@ -229,11 +262,12 @@ fn main() {
             priority,
             tag.as_deref(),
             parent.as_deref(),
+            &scope,
             cli.json,
         ),
-        Commands::Ready { limit } => commands::ready::run(&db_path, limit, cli.json),
-        Commands::Stats { oneline } => commands::stats::run(&db_path, oneline, cli.json),
-        Commands::Prime => commands::prime::run(&db_path, cli.json),
+        Commands::Ready { limit } => commands::ready::run(&db_path, limit, &scope, cli.json),
+        Commands::Stats { oneline } => commands::stats::run(&db_path, oneline, &scope, cli.json),
+        Commands::Prime => commands::prime::run(&db_path, &scope, cli.json),
         Commands::Show { id } => commands::show::run(&db_path, &id, cli.json),
         Commands::Update {
             id,
@@ -247,6 +281,7 @@ fn main() {
             remove_tags,
             notes,
             parent,
+            move_to,
         } => commands::update::run(
             &db_path,
             &id,
@@ -260,6 +295,7 @@ fn main() {
             remove_tags.as_deref(),
             notes.as_deref(),
             parent.as_deref(),
+            move_to.as_deref(),
             cli.json,
         ),
         Commands::Close {
@@ -276,13 +312,14 @@ fn main() {
             cli.json,
         ),
         Commands::Children { id } => commands::children::run(&db_path, &id, cli.json),
-        Commands::Epic => commands::epic::run(&db_path, cli.json),
+        Commands::Epic => commands::epic::run(&db_path, &scope, cli.json),
         Commands::Dep { action } => match action {
             DepAction::Add { child, parent } => commands::dep::add(&db_path, &child, &parent),
             DepAction::Remove { child, parent } => commands::dep::remove(&db_path, &child, &parent),
         },
         Commands::Comment { id, body } => commands::comment::run(&db_path, &id, &body, cli.json),
-        Commands::Blocked => commands::blocked::run(&db_path, cli.json),
+        Commands::Blocked => commands::blocked::run(&db_path, &scope, cli.json),
+        Commands::Workspaces => commands::workspaces::run(&db_path, &scope, cli.json),
         Commands::InitRules { global } => {
             if let Err(e) = commands::init_rules::run(global) {
                 eprintln!("error: {e}");

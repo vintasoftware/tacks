@@ -5,7 +5,7 @@
 {% block content %}
 <div id="content-area">
 <div id="content-inner"
-     hx-get="/epics/{{ task.id }}{{ poll_query }}"
+     hx-get="{{ layout.prefix }}/epics/{{ task.id }}{{ poll_query }}"
      hx-trigger="every 2s [document.visibilityState === 'visible']"
      hx-select="#content-inner"
      hx-swap="outerHTML show:none"
@@ -14,7 +14,7 @@
 
 <nav aria-label="Breadcrumb">
   <ol class="breadcrumb">
-    <li><a href="/epics">Epics</a></li>
+    <li><a href="{{ layout.prefix }}/epics">Epics</a></li>
     <li><span class="breadcrumb-current">{{ task.title }}</span></li>
     <li>
       {% if view == "list" %}
@@ -67,9 +67,9 @@
   <div class="view-toggle-group">
     {% if view == "list" %}
     <span class="view-toggle-btn view-toggle-active">List</span>
-    <a href="/epics/{{ task.id }}?view=board" class="view-toggle-btn">Board</a>
+    <a href="{{ layout.prefix }}/epics/{{ task.id }}?view=board" class="view-toggle-btn">Board</a>
     {% else %}
-    <a href="/epics/{{ task.id }}?view=list" class="view-toggle-btn">List</a>
+    <a href="{{ layout.prefix }}/epics/{{ task.id }}?view=list" class="view-toggle-btn">List</a>
     <span class="view-toggle-btn view-toggle-active">Board</span>
     {% endif %}
   </div>
@@ -86,7 +86,7 @@
       <li role="option" data-value="all" data-label="All time"><span>All time</span></li>
     </ul>
     <input type="hidden" name="done_since" id="epic-done-since-select" value="{{ done_since }}"
-           hx-get="/epics/{{ task.id }}"
+           hx-get="{{ layout.prefix }}/epics/{{ task.id }}"
            hx-target="#content-inner"
            hx-select="#content-inner"
            hx-swap="outerHTML show:none"

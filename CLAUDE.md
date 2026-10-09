@@ -6,7 +6,7 @@ Lightweight task manager for AI coding agents. A local-only alternative to [bead
 
 - **Language**: Rust (edition 2024)
 - **Binary**: `tk` (installed via `cargo install`)
-- **Storage**: SQLite via rusqlite (bundled), local-only (no git, no sync)
+- **Storage**: SQLite via rusqlite (bundled), local-only (no sync; git is only invoked to detect the worktree)
 - **CLI framework**: clap (derive)
 - **Testing**: BDD with cucumber-rs (Gherkin feature files + assert_cmd)
 - **Output**: Human-readable tables (default) or JSON (`--json`, global flag)
@@ -33,6 +33,7 @@ src/
     children.rs     # tk children <id> (list subtasks)
     epic.rs         # tk epic (show epic progress)
     blocked.rs      # tk blocked (tasks blocked by open deps)
+    workspaces.rs   # tk workspaces (projects/workspaces with counts)
 tests/
   features/         # Gherkin .feature files (BDD specs + agent-readable docs)
     task_lifecycle.feature    dependencies.feature
@@ -41,6 +42,8 @@ tests/
     epic_tagging.feature      notes.feature
     children.feature          epic_status.feature
     blocked.feature           parent_filter.feature
+    workspace_scoping.feature web_workspaces.feature
+    (plus web/API features: serve, web_api, web_views, ...)
   bdd/
     main.rs         # cucumber-rs harness (World struct, runner)
     steps/          # Step definitions (shell out to tk binary via assert_cmd)
@@ -52,7 +55,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 
 ## Key Design Decisions
 
-- **Local-only storage**: No git integration, no sync, no distributed concerns
+- **Local-only storage**: No sync, no distributed concerns. Git is only invoked (git rev-parse) to detect the current worktree/project; tasks are never stored in git
 - **Hash-based IDs**: `tk-a1b2` format (same as beads)
 - **Hierarchical IDs**: Subtasks use `parent.N` format (e.g., `tk-a1b2.1`)
 - **Tags over types**: Epic/task/bug are tags, not a type column. `epic` tag auto-added on child creation.
@@ -60,7 +63,8 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 - **Version-gated migrations**: `schema_version` in config table, sequential `if version < N` blocks in `run_migrations()`
 - **Cycle detection**: Write-time BFS guard on `dep add` rejects circular dependencies
 - **No external dependencies**: SQLite is bundled (no system sqlite needed)
-- **Env var override**: `TACKS_DB` overrides default `.tacks/tacks.db` path
+- **Global DB**: default path is `~/.tacks/tacks.db`; `--db` / `TACKS_DB` override it
+- **Workspace scoping**: tasks are scoped per git worktree; see `docs/workspace-scoping.md` (`src/scope.rs` resolves scope)
 - **BDD-driven**: Feature files are both executable tests and agent-readable behavioral documentation
 - **`--json` is global**: Declared on top-level Cli struct, accessed via `cli.json`
 
@@ -69,7 +73,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (49 scenarios, 274 steps)
+cargo test --test bdd    # Run BDD scenarios (268 scenarios, 2228 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```
@@ -98,6 +102,9 @@ tk comment <id> "message"         # Add comment
 tk children <id>                  # List subtasks of a task
 tk epic                           # Show epic progress (completion stats)
 tk blocked                        # List tasks blocked by open deps
+tk workspaces                     # Projects/workspaces with task counts
+tk update <id> --move-to <path|none>  # Move task (+subtasks) to another workspace
+tk list --scope project|all       # Widen scope (default: current workspace); also --workspace <path>
 tk stats                          # Backlog overview (status/priority/tag counts)
 tk stats --oneline                # Compact: "3 open, 2 in_progress, 5 done"
 tk prime                          # AI context: stats + in-progress + ready queue
@@ -156,6 +163,6 @@ Workflow: dispatch -> wait for completion -> review -> dispatch next task
 
 ## Do Not Modify
 
-- `.tacks/tacks.db` -- managed by tacks, not by hand
+- `~/.tacks/tacks.db` -- managed by tacks, not by hand
 - `Cargo.lock` -- managed by cargo
 - `memory/agents/*/learnings.md` -- managed by individual agents

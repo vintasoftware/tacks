@@ -56,14 +56,13 @@ async fn i_post_modal_create_form_with_parent(
     )
     .await;
     // Store the created task id for later assertions
-    if status == 201 {
-        if let Ok(json) = serde_json::from_str::<Value>(&body_text) {
-            if let Some(id) = json["id"].as_str() {
-                world
-                    .task_ids
-                    .insert("modal-child".to_string(), id.to_string());
-            }
-        }
+    if status == 201
+        && let Ok(json) = serde_json::from_str::<Value>(&body_text)
+        && let Some(id) = json["id"].as_str()
+    {
+        world
+            .task_ids
+            .insert("modal-child".to_string(), id.to_string());
     }
 }
 

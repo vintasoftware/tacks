@@ -297,10 +297,10 @@ async fn i_post_deps_endpoint(world: &mut TacksWorld, alias: String, raw_body: S
     let mut body: Value = serde_json::from_str(&raw_body)
         .unwrap_or_else(|e| panic!("step body {raw_body:?} is not valid JSON: {e}"));
     // If parent_id is an alias, resolve it to the actual task id
-    if let Some(parent_ref) = body.get("parent_id").and_then(|v| v.as_str()) {
-        if let Some(resolved_id) = world.task_ids.get(parent_ref).cloned() {
-            body["parent_id"] = Value::String(resolved_id);
-        }
+    if let Some(parent_ref) = body.get("parent_id").and_then(|v| v.as_str())
+        && let Some(resolved_id) = world.task_ids.get(parent_ref).cloned()
+    {
+        body["parent_id"] = Value::String(resolved_id);
     }
     http_post(world, &format!("/api/tasks/{id}/deps"), body).await;
 }

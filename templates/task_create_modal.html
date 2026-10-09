@@ -36,6 +36,23 @@
       {% endfor %}
     </select>
 
+    {% if let Some(w) = fixed_workspace.as_ref() %}
+    <input type="hidden" name="workspace_id" value="{{ w.id }}">
+    <p class="ws-fixed"><span class="meta-label">Workspace</span> <span class="badge ws-badge">{{ w.name }}</span></p>
+    {% else %}
+    <select id="create-workspace" name="workspace_id" aria-label="Workspace">
+      <option value="">No workspace (unscoped)</option>
+      {% for g in ws_groups.iter() %}
+      <optgroup label="{{ g.project_name }}">
+        {% for o in g.options.iter() %}
+        <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}>{{ o.name }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <small class="ws-move-hint">Subtasks (with a parent epic) use their parent's workspace.</small>
+
     <footer class="modal-actions">
       <button type="button" class="secondary outline" onclick="document.getElementById('task-modal').close()">Cancel</button>
       <button type="submit">Create Issue</button>

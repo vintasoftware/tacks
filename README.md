@@ -33,7 +33,7 @@ cargo install --path .
 ## Quick start
 
 ```bash
-tk init                              # initialize in current directory
+tk init                              # initialize the global database (~/.tacks/tacks.db)
 tk create "Implement auth" -p 1      # create a P1 task
 tk create "Write tests" -d "Unit and integration tests for auth module"
 tk list                              # show open tasks
@@ -48,12 +48,12 @@ tk close <id> -c "Done"              # close with comment
 
 | Command | Description |
 |---------|-------------|
-| `tk init` | Initialize a tacks database in the current directory |
-| `tk create <title>` | Create a task (`-p` priority, `-d` description, `-t` tags, `--parent` subtask) |
+| `tk init` | Initialize the tacks database (global by default, `~/.tacks/tacks.db`) |
+| `tk create <title>` | Create a task (`-p` priority, `-d` description, `-t` tags, `--parent` subtask; sets the current workspace) |
 | `tk list` | List open tasks (`-a` all, `-s` status, `-p` priority, `-t` tag, `--parent` filter) |
 | `tk ready` | Show tasks with no open blockers (`--limit N`) |
 | `tk show <id>` | Task details with blockers, dependents, comments, notes |
-| `tk update <id>` | Update fields (`--claim`, `--notes`, `--parent`, `-d`, `-p`, `-t`, `-s`) |
+| `tk update <id>` | Update fields (`--claim`, `--notes`, `--parent`, `--move-to <path|none>`, `-d`, `-p`, `-t`, `-s`) |
 | `tk close <id>` | Close a task (`-c` comment, `-r` reason, `--force` to bypass subtask guard) |
 | `tk dep add <child> <parent>` | Add a dependency (cycle-checked) |
 | `tk dep remove <child> <parent>` | Remove a dependency |
@@ -62,11 +62,14 @@ tk close <id> -c "Done"              # close with comment
 | `tk epic` | Show epic progress (completion stats) |
 | `tk blocked` | List tasks blocked by open dependencies |
 | `tk stats` | Backlog overview (`--oneline` for compact output) |
+| `tk workspaces` | List projects and workspaces with task counts and a `missing` marker |
 | `tk prime` | AI context output: stats + in-progress + ready queue |
 | `tk init-rules` | Install Claude Code rules file (`--global` for all projects) |
 | `tk serve` | Start web UI server (`--port` to set port, default 3000) |
 
 All commands support `--json` for machine-readable output.
+
+Global flags: `--db <path>` (`TACKS_DB`), `--workspace <path>` (`TACKS_WORKSPACE`), `--scope workspace|project|all` (default `workspace`).
 
 ## Web UI
 
@@ -169,9 +172,21 @@ If a breaking change is ever necessary, it will be flagged with a `BREAKING:` co
 
 ## Storage
 
-Tacks uses SQLite (bundled, no system dependency) stored at `.tacks/tacks.db` in your project directory. Override with `TACKS_DB` environment variable.
+Tacks uses SQLite (bundled, no system dependency) in one global database at `~/.tacks/tacks.db`. Override with `--db` or the `TACKS_DB` environment variable. A `.tacks/tacks.db` in the current directory is no longer used.
 
-No sync, no git integration, no network calls. Everything stays local.
+### Workspace scoping
+
+Tasks are scoped per git worktree ("workspace"); worktrees of the same repository form a "project". The workspace comes from `--workspace` / `TACKS_WORKSPACE`, else `git rev-parse --show-toplevel` from the current directory, else the "unscoped" bucket (existing tasks and tasks created outside a repo).
+
+- `list`, `ready`, `blocked`, `epic`, `stats`, `prime` show the current workspace only. Use `--scope project` for every workspace of the repository, `--scope all` for everything. (`list -a` still means "include closed".)
+- `create` records the current workspace; subtasks inherit the parent's workspace.
+- ID-based commands (`show`, `update`, `close`, `comment`, `dep`, `children`) work on any task, whatever the scope.
+- `tk update <id> --move-to <path|none>` moves a task and its subtasks to another workspace (or the unscoped bucket).
+- `tk prime` is silent when the current workspace has never used tacks.
+
+See `docs/workspace-scoping.md` for details.
+
+No sync, no network calls. Everything stays local (git is only invoked to detect the worktree).
 
 ## License
 

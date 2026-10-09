@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::db::Database;
 use crate::models::Task;
+use crate::scope::{Scope, ScopeMode};
 
 const READY_LIMIT: u32 = 5;
 
@@ -15,13 +16,17 @@ const COMMAND_REFERENCE: &[&str] = &[
     "tk dep add|remove <child> <parent>",
     "tk comment <id> <body>",
     "tk stats [--oneline] [--json]",
+    "tk workspaces [--json]",
+    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen",
 ];
 
 /// Run the `tk prime` command.
 ///
 /// Outputs an AI-optimized context summary composed of stats, in-progress tasks,
-/// and the ready queue. If no `.tacks/` database exists, exits silently.
-pub fn run(db_path: &Path, json: bool) -> Result<(), String> {
+/// and the ready queue for the current scope. Exits silently when the database does not
+/// exist, the current workspace is not registered, or the scope cannot be resolved.
+/// Outside a git repository it prints the unscoped bucket.
+pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
     // Silent exit when no tacks database is present — hooks call this on every
     // session, so it must be a no-op in projects that don't use tacks.
     if !db_path.exists() {
@@ -30,9 +35,35 @@ pub fn run(db_path: &Path, json: bool) -> Result<(), String> {
 
     let db = Database::open(db_path)?;
 
-    let by_status = db.task_count_by_status()?;
-    let in_progress = db.list_tasks(false, Some("in_progress"), None, None, None, None, None)?;
-    let ready = db.get_ready_tasks(Some(READY_LIMIT))?;
+    // Also silent when the current workspace never used tacks.
+    // A scope that cannot be resolved (bad --workspace / TACKS_WORKSPACE) is also silent:
+    // exit status 0, no output.
+    if scope.mode == ScopeMode::Workspace {
+        match scope.resolve() {
+            Ok(Some(_)) => match scope.registered_workspace(&db) {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return Ok(()),
+            },
+            Ok(None) => {}
+            Err(_) => return Ok(()),
+        }
+    }
+    let Ok(filter) = scope.filter(&db) else {
+        return Ok(());
+    };
+
+    let by_status = db.task_count_by_status(&filter)?;
+    let in_progress = db.list_tasks(
+        false,
+        Some("in_progress"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &filter,
+    )?;
+    let ready = db.get_ready_tasks(Some(READY_LIMIT), &filter)?;
 
     if json {
         print_json(&by_status, &in_progress, &ready)
@@ -161,11 +192,23 @@ mod tests {
     }
 
     #[test]
+    fn test_prime_silent_when_workspace_not_registered() {
+        let tmp = TempDir::new().unwrap();
+        init_db(&tmp);
+        tk(&tmp).args(["prime"]).assert().success().stdout("");
+        tk(&tmp)
+            .args(["--scope", "all", "prime"])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("# Tacks: Project Status"));
+    }
+
+    #[test]
     fn test_prime_markdown_empty_db() {
         let tmp = TempDir::new().unwrap();
         init_db(&tmp);
 
-        let output = tk(&tmp).args(["prime"]).output().unwrap();
+        let output = tk(&tmp).args(["--scope", "all", "prime"]).output().unwrap();
 
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -182,7 +225,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init_db(&tmp);
 
-        let output = tk(&tmp).args(["--json", "prime"]).output().unwrap();
+        let output = tk(&tmp)
+            .args(["--json", "--scope", "all", "prime"])
+            .output()
+            .unwrap();
 
         assert!(output.status.success());
         let json: Value =

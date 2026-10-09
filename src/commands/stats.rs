@@ -2,13 +2,15 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::db::Database;
+use crate::scope::Scope;
 
-pub fn run(db_path: &Path, oneline: bool, json: bool) -> Result<(), String> {
+pub fn run(db_path: &Path, oneline: bool, scope: &Scope, json: bool) -> Result<(), String> {
     let db = Database::open(db_path)?;
 
-    let by_status = db.task_count_by_status()?;
-    let by_priority = db.task_count_by_priority()?;
-    let by_tag = db.task_count_by_tag()?;
+    let filter = scope.filter(&db)?;
+    let by_status = db.task_count_by_status(&filter)?;
+    let by_priority = db.task_count_by_priority(&filter)?;
+    let by_tag = db.task_count_by_tag(&filter)?;
 
     if json {
         let status_map: HashMap<&str, i64> =

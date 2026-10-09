@@ -3,6 +3,7 @@ use axum::response::{IntoResponse, Response};
 
 /// Application error type for web handlers.
 pub enum AppError {
+    BadRequest(String),
     NotFound(String),
     Validation(String),
     Conflict(String),
@@ -12,6 +13,7 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),

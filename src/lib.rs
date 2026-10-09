@@ -4,3 +4,5 @@ pub mod db;
 pub mod models;
 /// Axum-based web server and router.
 pub mod web;
+/// Workspaces overview rows (shared by the CLI and the web API).
+pub mod workspace_overview;

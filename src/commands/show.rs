@@ -3,6 +3,56 @@ use std::path::Path;
 use super::{format_priority, format_status};
 use crate::db::Database;
 
+/// Workspace details for display, with its project name and on-disk state.
+struct WorkspaceInfo {
+    id: i64,
+    name: String,
+    path: String,
+    project_id: i64,
+    project_name: String,
+    missing: bool,
+}
+
+fn workspace_info(
+    db: &Database,
+    workspace_id: Option<i64>,
+) -> Result<Option<WorkspaceInfo>, String> {
+    let Some(id) = workspace_id else {
+        return Ok(None);
+    };
+    let Some(w) = db.get_workspace(id)? else {
+        return Ok(None);
+    };
+    let project_name = db
+        .get_project(w.project_id)?
+        .map(|p| p.name)
+        .unwrap_or_default();
+    let missing = !Path::new(&w.path).exists();
+    Ok(Some(WorkspaceInfo {
+        id: w.id,
+        name: w.name,
+        path: w.path,
+        project_id: w.project_id,
+        project_name,
+        missing,
+    }))
+}
+
+fn workspace_json(db: &Database, workspace_id: Option<i64>) -> Result<serde_json::Value, String> {
+    Ok(match workspace_info(db, workspace_id)? {
+        Some(w) => serde_json::json!({
+            "id": w.id,
+            "name": w.name,
+            "path": w.path,
+            "project_id": w.project_id,
+            "project_name": w.project_name,
+            "missing": w.missing,
+        }),
+        None => serde_json::Value::Null,
+    })
+}
+
+/// Show a task with blockers, dependents, subtasks, comments and its workspace.
 pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
     let db = Database::open(db_path)?;
     let task = db
@@ -20,7 +70,9 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
             .collect();
         let children = db.get_children(id)?;
         let dependents = db.get_dependents(id)?;
+        let workspace = workspace_json(&db, task.workspace_id)?;
         if let Some(obj) = value.as_object_mut() {
+            obj.insert("workspace".to_string(), workspace);
             obj.insert(
                 "comments".to_string(),
                 serde_json::to_value(&comments).unwrap_or_default(),
@@ -65,6 +117,16 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
     }
     if !task.tags.is_empty() {
         println!("Tags:        {}", task.tags.join(", "));
+    }
+    match workspace_info(&db, task.workspace_id)? {
+        Some(w) => println!(
+            "Workspace:   {} ({}) project: {}{}",
+            w.name,
+            w.path,
+            w.project_name,
+            if w.missing { " (missing)" } else { "" }
+        ),
+        None => println!("Workspace:   none"),
     }
     println!("Created:     {}", task.created_at.format("%Y-%m-%d %H:%M"));
     println!("Updated:     {}", task.updated_at.format("%Y-%m-%d %H:%M"));

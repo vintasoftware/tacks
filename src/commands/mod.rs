@@ -13,6 +13,7 @@ pub mod ready;
 pub mod show;
 pub mod stats;
 pub mod update;
+pub mod workspaces;
 
 use crate::models::Task;
 use colored::Colorize;
@@ -102,6 +103,7 @@ mod tests {
             updated_at: now,
             close_reason: None,
             notes: None,
+            workspace_id: None,
         }
     }
 

@@ -12,6 +12,7 @@ use crate::models::{Comment, Task, validate_close_reason};
 use crate::web::AppState;
 use crate::web::errors::AppError;
 use crate::web::render_markdown;
+use crate::web::scope::{ApiScope, Layout, Scope, WsGroup, WsInfo};
 
 /// Render an askama template into an axum HTML response.
 fn render_template<T: Template>(template: T) -> Response {
@@ -42,6 +43,8 @@ pub struct CreateTaskBody {
     pub priority: Option<u8>,
     pub tags: Option<Vec<String>>,
     pub parent_id: Option<String>,
+    /// Workspace to create the task in. Ignored for subtasks (they inherit the parent's).
+    pub workspace_id: Option<i64>,
 }
 
 /// Request body for PATCH /api/tasks/:id.
@@ -56,6 +59,20 @@ pub struct UpdateTaskBody {
     pub notes: Option<String>,
     /// Reparent: set to a task ID to move under that parent, or "none" to promote to top-level.
     pub parent_id: Option<String>,
+    /// Move the task (and its subtasks) to this workspace id; `null` moves it to the
+    /// unscoped bucket; absent leaves the workspace unchanged.
+    #[serde(default, deserialize_with = "deserialize_present_or_null")]
+    pub workspace_id: Option<Option<i64>>,
+}
+
+/// Deserialize a field so that "absent" (via `serde(default)`) stays `None`, an explicit
+/// `null` becomes `Some(None)` and a value becomes `Some(Some(v))`.
+fn deserialize_present_or_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Request body for POST /api/tasks/:id/close.
@@ -157,19 +174,33 @@ pub async fn api_create_task(
     let description = body.description.clone();
     let tags = body.tags.clone().unwrap_or_default();
     let parent_id = body.parent_id.clone();
+    let requested_workspace = body.workspace_id;
 
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<Task, String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<Task, AppError> {
         let db = db.lock().unwrap();
 
-        // Generate ID
-        let id = if let Some(ref pid) = parent_id {
+        // Generate ID; subtasks inherit the parent's workspace
+        let (id, workspace_id) = if let Some(ref pid) = parent_id {
             // Verify parent exists
-            db.get_task(pid)?
-                .ok_or_else(|| format!("parent task not found: {pid}"))?;
-            db.generate_child_id(pid)?
+            let parent = db
+                .get_task(pid)
+                .map_err(AppError::Internal)?
+                .ok_or_else(|| AppError::Internal(format!("parent task not found: {pid}")))?;
+            (
+                db.generate_child_id(pid).map_err(AppError::Internal)?,
+                parent.workspace_id,
+            )
         } else {
-            db.generate_id()?
+            if let Some(ws) = requested_workspace
+                && db.get_workspace(ws).map_err(AppError::Internal)?.is_none()
+            {
+                return Err(AppError::NotFound(format!("workspace not found: {ws}")));
+            }
+            (
+                db.generate_id().map_err(AppError::Internal)?,
+                requested_workspace,
+            )
         };
 
         let now = chrono::Utc::now();
@@ -186,25 +217,26 @@ pub async fn api_create_task(
             updated_at: now,
             close_reason: None,
             notes: None,
+            workspace_id,
         };
 
-        db.insert_task(&task)?;
+        db.insert_task(&task).map_err(AppError::Internal)?;
 
         // Auto-tag parent as epic when a child is created, and sync epic status
         if let Some(ref pid) = parent_id {
-            let mut parent_tags = db.get_task_tags(pid)?;
+            let mut parent_tags = db.get_task_tags(pid).map_err(AppError::Internal)?;
             if !parent_tags.contains(&"epic".to_string()) {
                 parent_tags.push("epic".to_string());
-                db.update_tags(pid, &parent_tags)?;
+                db.update_tags(pid, &parent_tags)
+                    .map_err(AppError::Internal)?;
             }
-            db.sync_epic_status(pid)?;
+            db.sync_epic_status(pid).map_err(AppError::Internal)?;
         }
 
         Ok(task)
     })
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(AppError::Internal)?;
+    .map_err(|e| AppError::Internal(e.to_string()))??;
 
     Ok((StatusCode::CREATED, Json(result)))
 }
@@ -260,6 +292,7 @@ fn parse_status_values(s: &Option<String>) -> Vec<String> {
 /// `status` and `priority` accept comma-separated values for multi-select OR filtering.
 pub async fn api_list_tasks(
     State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
     Query(query): Query<ListTasksQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let show_all = query.all.unwrap_or(false);
@@ -300,6 +333,7 @@ pub async fn api_list_tasks(
             parent_filter.as_deref(),
             search_filter.as_deref(),
             None,
+            &scope,
         )?;
         // Post-filter for multi-value OR semantics
         if status_values.len() > 1 {
@@ -330,13 +364,14 @@ pub async fn api_list_tasks(
 /// GET /api/tasks/ready — Tasks with no open blockers (200).
 pub async fn api_ready_tasks(
     State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
     Query(query): Query<ReadyTasksQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let limit = query.limit;
     let db = state.db.clone();
     let tasks = tokio::task::spawn_blocking(move || {
         let db = db.lock().unwrap();
-        db.get_ready_tasks(limit)
+        db.get_ready_tasks(limit, &scope)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -348,11 +383,12 @@ pub async fn api_ready_tasks(
 /// GET /api/tasks/blocked — Tasks with open blockers (200).
 pub async fn api_blocked_tasks(
     State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
 ) -> Result<impl IntoResponse, AppError> {
     let db = state.db.clone();
     let tasks = tokio::task::spawn_blocking(move || {
         let db = db.lock().unwrap();
-        db.get_blocked_tasks()
+        db.get_blocked_tasks(&scope)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -395,9 +431,14 @@ pub async fn api_update_task(
         db.get_task(&id)?
             .ok_or_else(|| format!("task not found: {id}"))?;
 
-        // Update tags separately if provided
-        if let Some(ref tags) = body.tags {
-            db.update_tags(&id, tags)?;
+        // Validate everything that can be checked up front, so a bad request changes nothing.
+        if let Some(Some(ws)) = body.workspace_id
+            && db.get_workspace(ws)?.is_none()
+        {
+            return Err(format!("workspace not found: {ws}"));
+        }
+        if let Some(ref s) = body.status {
+            s.parse::<crate::models::Status>()?;
         }
 
         // Convert parent_id field to two-level Option for reparenting
@@ -409,26 +450,39 @@ pub async fn api_update_task(
             }
         });
 
-        // Update remaining fields
-        db.update_task_with_parent(
-            &id,
-            body.title.as_deref(),
-            body.priority,
-            body.status.as_deref(),
-            body.description.as_deref(),
-            body.assignee.as_deref(),
-            None,
-            body.notes.as_deref(),
-            new_parent,
-        )?;
+        // One transaction: any failure leaves the task unchanged. Order: fields and
+        // reparent (which moves the subtree to the new parent's workspace), then the
+        // explicit workspace move, which therefore wins when both are given.
+        db.with_savepoint(|| {
+            if let Some(ref tags) = body.tags {
+                db.update_tags(&id, tags)?;
+            }
 
-        // Sync parent epic status if this task's status changed
-        if body.status.is_some()
-            && let Some(task) = db.get_task(&id)?
-            && let Some(ref pid) = task.parent_id
-        {
-            db.sync_epic_status(pid)?;
-        }
+            db.update_task_with_parent(
+                &id,
+                body.title.as_deref(),
+                body.priority,
+                body.status.as_deref(),
+                body.description.as_deref(),
+                body.assignee.as_deref(),
+                None,
+                body.notes.as_deref(),
+                new_parent,
+            )?;
+
+            // Sync parent epic status if this task's status changed
+            if body.status.is_some()
+                && let Some(task) = db.get_task(&id)?
+                && let Some(ref pid) = task.parent_id
+            {
+                db.sync_epic_status(pid)?;
+            }
+
+            if let Some(ws) = body.workspace_id {
+                db.set_task_workspace(&id, ws)?;
+            }
+            Ok(())
+        })?;
 
         // Return the updated task
         db.get_task(&id)?
@@ -641,12 +695,15 @@ pub struct EpicProgress {
 }
 
 /// GET /api/epics — List epics with child completion progress (200).
-pub async fn api_epics(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub async fn api_epics(
+    State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
+) -> Result<impl IntoResponse, AppError> {
     let db = state.db.clone();
     let result: Vec<EpicProgress> =
         tokio::task::spawn_blocking(move || -> Result<Vec<EpicProgress>, String> {
             let db = db.lock().unwrap();
-            let epics = db.list_tasks(true, None, None, Some("epic"), None, None, None)?;
+            let epics = db.list_tasks(true, None, None, Some("epic"), None, None, None, &scope)?;
             let mut out = Vec::with_capacity(epics.len());
             for epic in epics {
                 let children = db.get_children(&epic.id)?;
@@ -686,14 +743,17 @@ pub struct PrimeResponse {
 }
 
 /// GET /api/prime — AI context: stats + in-progress tasks + ready queue (200).
-pub async fn api_prime(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub async fn api_prime(
+    State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
+) -> Result<impl IntoResponse, AppError> {
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<PrimeResponse, String> {
         let db = db.lock().unwrap();
 
-        let by_status_vec = db.task_count_by_status()?;
-        let by_priority_vec = db.task_count_by_priority()?;
-        let by_tag_vec = db.task_count_by_tag()?;
+        let by_status_vec = db.task_count_by_status(&scope)?;
+        let by_priority_vec = db.task_count_by_priority(&scope)?;
+        let by_tag_vec = db.task_count_by_tag(&scope)?;
 
         let by_status: Map<String, Value> = by_status_vec
             .into_iter()
@@ -716,9 +776,17 @@ pub async fn api_prime(State(state): State<AppState>) -> Result<impl IntoRespons
             by_tag,
         };
 
-        let in_progress =
-            db.list_tasks(false, Some("in_progress"), None, None, None, None, None)?;
-        let ready = db.get_ready_tasks(Some(5))?;
+        let in_progress = db.list_tasks(
+            false,
+            Some("in_progress"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &scope,
+        )?;
+        let ready = db.get_ready_tasks(Some(5), &scope)?;
 
         Ok(PrimeResponse {
             stats,
@@ -731,6 +799,22 @@ pub async fn api_prime(State(state): State<AppState>) -> Result<impl IntoRespons
     .map_err(AppError::Internal)?;
 
     Ok(Json(result))
+}
+
+/// GET /api/workspaces — Projects' workspaces with task counts (200).
+///
+/// Same rows as `tk workspaces --json`; `current` is always false for the web API.
+pub async fn api_workspaces(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let db = state.db.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        let db = db.lock().unwrap();
+        crate::workspace_overview::workspace_rows(&db, None)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(AppError::Internal)?;
+
+    Ok(Json(rows))
 }
 
 /// GET /api/poll — Lightweight change-detection endpoint for HTMX polling.
@@ -786,6 +870,8 @@ struct TaskRow {
     children_total: usize,
     /// Number of open (non-done) blockers for this task.
     blocked_count: usize,
+    /// Workspace of the task, set only in project and All scopes (shown as a badge).
+    workspace: Option<WsInfo>,
 }
 
 impl TaskRow {
@@ -811,7 +897,16 @@ impl TaskRow {
             children_done,
             children_total,
             blocked_count,
+            workspace: None,
         }
+    }
+
+    /// Attach the workspace badge data when the scope shows badges.
+    fn with_workspace(mut self, scope: &Scope) -> Self {
+        if scope.show_workspace_badge() {
+            self.workspace = self.task.workspace_id.and_then(|id| scope.ws(id)).cloned();
+        }
+        self
     }
 }
 
@@ -883,6 +978,7 @@ fn fetch_blocker_counts(
 #[derive(Template)]
 #[template(path = "tasks_list.html")]
 struct TaskListTemplate {
+    layout: Layout,
     tasks: Vec<TaskRow>,
     status_filter: Option<String>,
     priority_filter: Option<String>,
@@ -904,6 +1000,11 @@ struct TaskListTemplate {
 #[template(path = "task_detail.html")]
 #[allow(dead_code)]
 struct TaskDetailTemplate {
+    layout: Layout,
+    /// Workspace of the task, if any.
+    ws: Option<WsInfo>,
+    /// Workspace `<option>`s grouped by project for the move selector.
+    ws_groups: Vec<WsGroup>,
     task: Task,
     /// Parent epic, if this task is a subtask.
     parent: Option<Task>,
@@ -921,6 +1022,10 @@ struct TaskDetailTemplate {
 #[template(path = "task_detail_fragment.html")]
 #[allow(dead_code)]
 struct TaskDetailFragmentTemplate {
+    /// Workspace of the task, if any.
+    ws: Option<WsInfo>,
+    /// Workspace `<option>`s grouped by project for the move selector.
+    ws_groups: Vec<WsGroup>,
     task: Task,
     /// Parent epic, if this task is a subtask.
     parent: Option<Task>,
@@ -938,6 +1043,7 @@ struct TaskDetailFragmentTemplate {
 #[template(path = "board.html")]
 #[allow(dead_code)]
 struct BoardTemplate {
+    layout: Layout,
     open_tasks: Vec<TaskRow>,
     in_progress_tasks: Vec<TaskRow>,
     blocked_tasks: Vec<TaskRow>,
@@ -972,6 +1078,7 @@ pub struct BoardQuery {
 #[allow(dead_code)]
 struct EpicRow {
     task: Task,
+    workspace: Option<WsInfo>,
     children_total: usize,
     children_done: usize,
     children_in_progress: usize,
@@ -982,6 +1089,7 @@ struct EpicRow {
 #[derive(Template)]
 #[template(path = "epics.html")]
 struct EpicsTemplate {
+    layout: Layout,
     epics: Vec<EpicRow>,
     /// Currently active status filter (empty = none).
     status_filter: Option<String>,
@@ -1007,6 +1115,7 @@ pub struct EpicsQuery {
 #[template(path = "epic_detail.html")]
 #[allow(dead_code)]
 struct EpicDetailTemplate {
+    layout: Layout,
     task: Task,
     children: Vec<Task>,
     children_done: usize,
@@ -1041,7 +1150,14 @@ pub struct EpicDetailQuery {
 /// Template for the create task form at GET /tasks/new.
 #[derive(Template)]
 #[template(path = "task_new.html")]
-struct TaskNewTemplate;
+struct TaskNewTemplate {
+    layout: Layout,
+    /// URL prefix of the current scope (form action and redirect target).
+    prefix: String,
+    /// Workspace to pre-select (and the only choice in workspace scope).
+    default_workspace: Option<i64>,
+    ws_groups: Vec<WsGroup>,
+}
 
 /// Template for the task creation modal fragment at GET /tasks/new/modal.
 #[derive(Template)]
@@ -1049,6 +1165,10 @@ struct TaskNewTemplate;
 struct TaskCreateModalTemplate {
     /// Epics available for selection as parent task.
     epics: Vec<Task>,
+    /// The workspace in workspace scope; new tasks go there (no selector shown).
+    fixed_workspace: Option<WsInfo>,
+    /// Workspace `<option>`s (non-missing only) grouped by project, with the default selected.
+    ws_groups: Vec<WsGroup>,
 }
 
 /// Build a query string from current filter params for HTMX polling.
@@ -1081,6 +1201,7 @@ fn build_poll_query(
 /// GET /tasks — Task list page with optional filter query params.
 pub async fn task_list(
     State(state): State<AppState>,
+    scope: Scope,
     Query(params): Query<ListTasksQuery>,
 ) -> Response {
     let has_filter = params.status.is_some()
@@ -1107,6 +1228,8 @@ pub async fn task_list(
     };
 
     let db = state.db.clone();
+    let scope_filter = scope.filter;
+    let row_scope = scope.clone();
     let (task_rows, all_tags) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<TaskRow>, Vec<String>), String> {
             let db = db.lock().unwrap();
@@ -1127,6 +1250,7 @@ pub async fn task_list(
                 None,
                 search_filter.as_deref(),
                 None,
+                &scope_filter,
             )?;
             // Post-filter for multi-value OR semantics
             if status_values.len() > 1 {
@@ -1155,11 +1279,14 @@ pub async fn task_list(
             let blocker_counts = fetch_blocker_counts(&db, &task_ids)?;
             let rows: Vec<TaskRow> = tasks
                 .into_iter()
-                .map(|t| TaskRow::from_task(t, &parents, &child_counts, &blocker_counts))
+                .map(|t| {
+                    TaskRow::from_task(t, &parents, &child_counts, &blocker_counts)
+                        .with_workspace(&row_scope)
+                })
                 .collect();
             // Fetch all tags for the dropdown
             let all_tags: Vec<String> = db
-                .task_count_by_tag()?
+                .task_count_by_tag(&scope_filter)?
                 .into_iter()
                 .map(|(tag, _count)| tag)
                 .collect();
@@ -1177,6 +1304,7 @@ pub async fn task_list(
     );
 
     render_template(TaskListTemplate {
+        layout: scope.layout("tasks"),
         tasks: task_rows,
         status_filter: params.status,
         priority_filter: params.priority,
@@ -1190,8 +1318,14 @@ pub async fn task_list(
 }
 
 /// GET /tasks/new — Create task form.
-pub async fn task_new() -> Response {
-    render_template(TaskNewTemplate)
+pub async fn task_new(scope: Scope) -> Response {
+    let default_workspace = scope.default_workspace_id();
+    render_template(TaskNewTemplate {
+        layout: scope.layout("tasks"),
+        prefix: scope.prefix.clone(),
+        default_workspace,
+        ws_groups: scope.groups(default_workspace, false),
+    })
 }
 
 /// GET /tasks/new/modal — Task creation form as an HTML fragment for HTMX modal loading.
@@ -1200,11 +1334,21 @@ pub async fn task_new() -> Response {
 /// the create-task form.  The fragment is intended to be loaded into the `<dialog
 /// id="task-modal">` element via HTMX.  The parent dropdown is populated with all
 /// tasks that carry the "epic" tag.
-pub async fn task_create_modal(State(state): State<AppState>) -> Response {
+pub async fn task_create_modal(State(state): State<AppState>, scope: Scope) -> Response {
     let db = state.db.clone();
+    let scope_filter = scope.filter;
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<Task>, String> {
         let db = db.lock().unwrap();
-        db.list_tasks(true, None, None, Some("epic"), None, None, None)
+        db.list_tasks(
+            true,
+            None,
+            None,
+            Some("epic"),
+            None,
+            None,
+            None,
+            &scope_filter,
+        )
     })
     .await;
 
@@ -1226,7 +1370,19 @@ pub async fn task_create_modal(State(state): State<AppState>) -> Response {
         }
     };
 
-    render_template(TaskCreateModalTemplate { epics })
+    // Workspace scope: new tasks go to that workspace. Project scope: default to the first
+    // non-missing workspace of the project. All scope: default to none (unscoped).
+    let default_workspace = scope.default_workspace_id();
+    let fixed_workspace = if scope.workspace_id.is_some() {
+        scope.workspace().cloned()
+    } else {
+        None
+    };
+    render_template(TaskCreateModalTemplate {
+        epics,
+        fixed_workspace,
+        ws_groups: scope.groups(default_workspace, false),
+    })
 }
 
 /// Form body for POST /tasks (HTML form submission from task_new.html).
@@ -1235,6 +1391,8 @@ pub struct CreateTaskFormBody {
     pub title: String,
     pub description: Option<String>,
     pub priority: Option<u8>,
+    /// Workspace id; empty string means none. Absent: the scope's workspace, if any.
+    pub workspace_id: Option<String>,
 }
 
 /// POST /tasks — Handle HTML form submission from the create-task form.
@@ -1244,6 +1402,7 @@ pub struct CreateTaskFormBody {
 /// The JSON API at `POST /api/tasks` is unchanged and continues to return 201.
 pub async fn task_create_form(
     State(state): State<AppState>,
+    scope: Scope,
     Form(body): Form<CreateTaskFormBody>,
 ) -> Result<impl IntoResponse, AppError> {
     let title = body.title.trim().to_string();
@@ -1256,10 +1415,24 @@ pub async fn task_create_form(
         .filter(|d| !d.trim().is_empty())
         .map(|d| d.trim().to_string());
 
+    let workspace_id = match body.workspace_id.as_deref() {
+        None => scope.workspace_id,
+        Some("") => None,
+        Some(s) => Some(
+            crate::web::scope::parse_id(s)
+                .ok_or_else(|| AppError::Validation("invalid workspace_id".to_string()))?,
+        ),
+    };
+
     let db = state.db.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let db = db.lock().unwrap();
-        let id = db.generate_id()?;
+        if let Some(ws) = workspace_id
+            && db.get_workspace(ws).map_err(AppError::Internal)?.is_none()
+        {
+            return Err(AppError::NotFound(format!("workspace not found: {ws}")));
+        }
+        let id = db.generate_id().map_err(AppError::Internal)?;
         let now = chrono::Utc::now();
         let task = Task {
             id,
@@ -1274,14 +1447,14 @@ pub async fn task_create_form(
             updated_at: now,
             close_reason: None,
             notes: None,
+            workspace_id,
         };
-        db.insert_task(&task)
+        db.insert_task(&task).map_err(AppError::Internal)
     })
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(AppError::Internal)?;
+    .map_err(|e| AppError::Internal(e.to_string()))??;
 
-    Ok(Redirect::to("/tasks"))
+    Ok(Redirect::to(&format!("{}/tasks", scope.prefix)))
 }
 
 /// All data needed to render a task detail view (full page or modal fragment).
@@ -1300,6 +1473,7 @@ struct TaskDetailData {
 /// When called via direct browser navigation, renders the full page template.
 pub async fn task_detail(
     State(state): State<AppState>,
+    scope: Scope,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
@@ -1348,8 +1522,12 @@ pub async fn task_detail(
                 .iter()
                 .map(|c| render_markdown(&c.body))
                 .collect::<Vec<_>>();
+            let ws = data.task.workspace_id.and_then(|id| scope.ws(id)).cloned();
+            let ws_groups = scope.groups(data.task.workspace_id, true);
             if is_htmx {
                 render_template(TaskDetailFragmentTemplate {
+                    ws,
+                    ws_groups,
                     task: data.task,
                     parent: data.parent,
                     blockers: data.blockers,
@@ -1360,6 +1538,9 @@ pub async fn task_detail(
                 })
             } else {
                 render_template(TaskDetailTemplate {
+                    layout: scope.layout("tasks"),
+                    ws,
+                    ws_groups,
                     task: data.task,
                     parent: data.parent,
                     blockers: data.blockers,
@@ -1430,7 +1611,13 @@ fn build_epic_detail_poll_query(view: &str, done_since: &str) -> String {
 }
 
 /// GET /board — Kanban board view grouped by status, with optional epic and priority filters.
-pub async fn board(State(state): State<AppState>, Query(query): Query<BoardQuery>) -> Response {
+pub async fn board(
+    State(state): State<AppState>,
+    scope: Scope,
+    Query(query): Query<BoardQuery>,
+) -> Response {
+    let scope_filter = scope.filter;
+    let layout = scope.layout("board");
     let epic_filter = query.epic.clone();
     let priority_filter = query.priority.clone();
     let done_since_param = query.done_since.clone();
@@ -1440,7 +1627,16 @@ pub async fn board(State(state): State<AppState>, Query(query): Query<BoardQuery
         let db = db.lock().unwrap();
 
         // Fetch all epics for the dropdown.
-        let epics = db.list_tasks(true, None, None, Some("epic"), None, None, None)?;
+        let epics = db.list_tasks(
+            true,
+            None,
+            None,
+            Some("epic"),
+            None,
+            None,
+            None,
+            &scope_filter,
+        )?;
 
         // Parse multi-select values.
         let epic_values = parse_status_values(&epic_filter); // epic IDs are strings
@@ -1466,14 +1662,18 @@ pub async fn board(State(state): State<AppState>, Query(query): Query<BoardQuery
                 db_parent,
                 None,
                 None,
+                &scope_filter,
             )
         };
 
         // Fetch the set of task IDs that have at least one open blocker (via dep graph).
         // These tasks belong in the Blocked column regardless of their `status` field,
         // because `dep add` does not automatically change a task's status to "blocked".
-        let dep_blocked_ids: std::collections::HashSet<String> =
-            db.get_blocked_tasks()?.into_iter().map(|t| t.id).collect();
+        let dep_blocked_ids: std::collections::HashSet<String> = db
+            .get_blocked_tasks(&scope_filter)?
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
 
         // Fetch open tasks, then split: those with open blockers go to the blocked column.
         let open_raw = fetch("open", false)?;
@@ -1537,7 +1737,10 @@ pub async fn board(State(state): State<AppState>, Query(query): Query<BoardQuery
         let to_rows = |tasks: Vec<Task>| -> Vec<TaskRow> {
             tasks
                 .into_iter()
-                .map(|t| TaskRow::from_task(t, &parents, &empty_child_counts, &blocker_counts))
+                .map(|t| {
+                    TaskRow::from_task(t, &parents, &empty_child_counts, &blocker_counts)
+                        .with_workspace(&scope)
+                })
                 .collect()
         };
 
@@ -1552,6 +1755,7 @@ pub async fn board(State(state): State<AppState>, Query(query): Query<BoardQuery
         let poll_query = build_board_poll_query(&epic_filter, &priority_filter, &done_since_label);
 
         Ok(BoardTemplate {
+            layout,
             open_tasks,
             in_progress_tasks,
             blocked_tasks,
@@ -1577,7 +1781,13 @@ pub async fn board(State(state): State<AppState>, Query(query): Query<BoardQuery
 }
 
 /// GET /epics — Epics overview with subtask progress, optional status/priority filters.
-pub async fn epics(State(state): State<AppState>, Query(query): Query<EpicsQuery>) -> Response {
+pub async fn epics(
+    State(state): State<AppState>,
+    scope: Scope,
+    Query(query): Query<EpicsQuery>,
+) -> Response {
+    let scope_filter = scope.filter;
+    let layout = scope.layout("epics");
     let status_filter = query.status.clone();
     let priority_filter = query.priority.clone();
 
@@ -1587,7 +1797,16 @@ pub async fn epics(State(state): State<AppState>, Query(query): Query<EpicsQuery
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<EpicRow>, String> {
         let db = db.lock().unwrap();
-        let epic_tasks = db.list_tasks(true, None, None, Some("epic"), None, None, None)?;
+        let epic_tasks = db.list_tasks(
+            true,
+            None,
+            None,
+            Some("epic"),
+            None,
+            None,
+            None,
+            &scope_filter,
+        )?;
         let mut rows = Vec::with_capacity(epic_tasks.len());
         for task in epic_tasks {
             let children = db.get_children(&task.id)?;
@@ -1601,7 +1820,13 @@ pub async fn epics(State(state): State<AppState>, Query(query): Query<EpicsQuery
                 .filter(|c| matches!(c.status, crate::models::Status::InProgress))
                 .count();
             let children_open = children_total - children_done - children_in_progress;
+            let workspace = if scope.show_workspace_badge() {
+                task.workspace_id.and_then(|id| scope.ws(id)).cloned()
+            } else {
+                None
+            };
             rows.push(EpicRow {
+                workspace,
                 task,
                 children_total,
                 children_done,
@@ -1664,6 +1889,7 @@ pub async fn epics(State(state): State<AppState>, Query(query): Query<EpicsQuery
 
     match result {
         Ok(epics) => render_template(EpicsTemplate {
+            layout,
             epics,
             status_filter,
             priority_filter,
@@ -1680,9 +1906,13 @@ pub async fn epics(State(state): State<AppState>, Query(query): Query<EpicsQuery
 /// GET /epics/:id — Epic detail page with children task list (200 or 404).
 pub async fn epic_detail(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    scope: Scope,
     Query(query): Query<EpicDetailQuery>,
 ) -> Response {
+    let Some(id) = scope.param("id").map(str::to_string) else {
+        return (StatusCode::NOT_FOUND, "epic not found").into_response();
+    };
+    let layout = scope.layout("epics");
     // Normalise view param: accept "board", default to "list" for anything else.
     let view = match query.view.as_deref() {
         Some("board") => "board".to_string(),
@@ -1772,6 +2002,7 @@ pub async fn epic_detail(
             let done_since_str = done_since_label(&done_since_param);
             let poll_query = build_epic_detail_poll_query(&view_clone, &done_since_str);
             Ok(Some(EpicDetailTemplate {
+                layout,
                 task,
                 children,
                 children_done,
@@ -1803,11 +2034,14 @@ pub async fn epic_detail(
 }
 
 /// GET /api/tags — Unique tag names sorted by usage count descending (200).
-pub async fn api_tags(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub async fn api_tags(
+    State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
+) -> Result<impl IntoResponse, AppError> {
     let db = state.db.clone();
     let tags: Vec<String> = tokio::task::spawn_blocking(move || {
         let db = db.lock().unwrap();
-        db.task_count_by_tag()
+        db.task_count_by_tag(&scope)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -2044,14 +2278,17 @@ pub async fn epic_dep_tree(State(state): State<AppState>, Path(id): Path<String>
 }
 
 /// GET /api/stats — Task statistics (200).
-pub async fn api_stats(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+pub async fn api_stats(
+    State(state): State<AppState>,
+    ApiScope(scope): ApiScope,
+) -> Result<impl IntoResponse, AppError> {
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<StatsResponse, String> {
         let db = db.lock().unwrap();
 
-        let by_status_vec = db.task_count_by_status()?;
-        let by_priority_vec = db.task_count_by_priority()?;
-        let by_tag_vec = db.task_count_by_tag()?;
+        let by_status_vec = db.task_count_by_status(&scope)?;
+        let by_priority_vec = db.task_count_by_priority(&scope)?;
+        let by_tag_vec = db.task_count_by_tag(&scope)?;
 
         let by_status: Map<String, Value> = by_status_vec
             .into_iter()
@@ -2079,4 +2316,29 @@ pub async fn api_stats(State(state): State<AppState>) -> Result<impl IntoRespons
     .map_err(AppError::Internal)?;
 
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CreateTaskBody, UpdateTaskBody};
+
+    #[test]
+    fn test_update_body_workspace_id_distinguishes_absent_null_and_value() {
+        let absent: UpdateTaskBody = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert_eq!(absent.workspace_id, None);
+        let null: UpdateTaskBody = serde_json::from_str(r#"{"workspace_id":null}"#).unwrap();
+        assert_eq!(null.workspace_id, Some(None));
+        let value: UpdateTaskBody = serde_json::from_str(r#"{"workspace_id":4}"#).unwrap();
+        assert_eq!(value.workspace_id, Some(Some(4)));
+        assert!(serde_json::from_str::<UpdateTaskBody>(r#"{"workspace_id":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn test_create_body_workspace_id_is_optional() {
+        let none: CreateTaskBody = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert_eq!(none.workspace_id, None);
+        let some: CreateTaskBody =
+            serde_json::from_str(r#"{"title":"x","workspace_id":2}"#).unwrap();
+        assert_eq!(some.workspace_id, Some(2));
+    }
 }

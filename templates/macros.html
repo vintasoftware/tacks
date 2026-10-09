@@ -1,0 +1,1 @@
+{% macro ws_badge(ws) %}<span class="badge ws-badge{% if ws.missing %} ws-missing{% endif %}" title="{{ ws.project_name }}: {{ ws.path }}{% if ws.missing %} (path no longer exists){% endif %}">{{ ws.name }}{% if ws.missing %} · missing{% endif %}</span>{% endmacro %}
