@@ -110,9 +110,10 @@ menu on the workspace row in the sidebar):
   boards, lists, epics, counts or the create/move selects. Task detail by
   direct URL still works. It never touches the git worktree on disk. The
   confirmation dialog says how many tasks will be hidden. The CLI is not
-  affected (`tk workspaces` marks the workspace as archived). If an agent
-  registers the same path again (for example `tk create` in a recreated
-  worktree), the workspace and its tasks come back automatically.
+  affected (`tk workspaces` marks the workspace as archived). It comes
+  back automatically when a task is created there (`tk create`) or a task is
+  moved there (`tk update --move-to`); merely running `tk` in the directory does
+  not restore it.
 - **Restore workspace**: archived workspaces are listed in a collapsed
   "Archived" group at the bottom of the sidebar (with a count). Each has a
   "Restore" action. Restoring brings the workspace and all its tasks back
@@ -189,3 +190,44 @@ task detail layout, epics progress and the create modal fields.
   `archived_at`. The JSON API scopes (`?project=`, `?workspace=`, no param) are
   unchanged and still include archived workspaces' tasks; only HTML views hide
   them. All new POSTs go through the same-origin guard.
+
+## Decisions (UI pass 2)
+
+- **Board cards.** One shared macro (`macros.html`: `board_card`, `epic_board_card`).
+  The title link stays (keyboard, no-JS, hx-get target) but is styled as plain text;
+  a delegated click handler in `app.js` opens the modal for a click anywhere else on
+  the card (not on links, buttons or controls), so drag and drop is untouched. Meta
+  row order: id, priority, assignee, workspace badge (project/All scope), `💬 N`,
+  `blocked by N` chip whose tooltip lists the open blockers (`id: title`, taken from
+  the same query that already counted them). Done header: columns headers are flex
+  rows and the toggle has a fixed 20px box, which removes the vertical offset. Phones
+  (480px and below): the board (and the epic board) is a flex row, 85vw columns,
+  `scroll-snap-type: x mandatory`; tablets keep the 2x2 grid.
+- **Task list.** Columns: ID, Title, Status, Priority, Workspace (only when
+  `show_workspace_badge()`, i.e. project/All scope), Assignee, Tags, Updated. The
+  table lives in `.table-wrap` (horizontal scroll) and no columns are hidden on small
+  screens any more. Chips under the title: epic, blocked-by, feedback, subtask count.
+  Updated is server-rendered relative time (`relative_time`: just now, Nm, Nh, Nd, then
+  `Mon DD, YYYY` after 30 days) with the absolute UTC time as tooltip.
+- **Task detail.** Page and modal share `partials/task_meta.html` (definition list)
+  and `partials/task_body.html` (notes, description, deps, subtasks, comments); the
+  page adds the breadcrumb (`Issues` links to `<prefix>/tasks`) and the h1, the modal
+  keeps its header. The old "Back to task list" link and `task_workspace.html` (now
+  unused, left in place) are gone. Agent notes render as markdown in an amber-edged
+  block. Description placeholder is a muted "No description". Direct blockers and
+  dependents are listed expanded; the transitive tree stays collapsed under
+  "Dependency tree". Subtasks list appears for any task with children. Empty inline
+  edit placeholders carry `.empty-value`, which `extractCurrentText` treats as empty.
+  Workspace row: badge + project, path (monospace, 12px, ellipsis, full path in the
+  tooltip), small "Move to..." select (hint moved into its tooltip).
+- **Epic detail** uses the same `task_meta.html` but read-only (`editable=false`, no
+  move select) because the page re-renders on a 2s poll; it also shows notes and the
+  description section, and a progress bar above the metadata.
+- **Progress.** `m::progress`: bar with done / in progress / open segments (flex-grow
+  = counts, so no percentage math) and "N of M done", or "No subtasks".
+- **Create modal.** Every field has a visible 12px label above it (`.form-row`, 12px
+  gap); optional fields carry a muted "(optional)" hint; the workspace select is
+  labeled "Workspace" (fixed workspace shows the same label with the badge). Visible
+  labels replace placeholders and aria-labels.
+- **Remove dialog wording** now says the workspace returns when a task is created
+  there (`tk create`) or moved there (`tk update --move-to`).

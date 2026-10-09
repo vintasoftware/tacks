@@ -1,0 +1,54 @@
+{% import "macros.html" as m %}
+{# Metadata definition list shared by task detail (page and modal) and epic detail. Needs: task, parent, ws, ws_groups, updated_rel, editable. #}
+<dl class="task-meta">
+  <dt>Status</dt>
+  <dd{% if editable %} data-editable data-field="status" data-task-id="{{ task.id }}"{% endif %}>{% call m::status_badge(task.status) %}</dd>
+
+  <dt>Priority</dt>
+  <dd{% if editable %} data-editable data-field="priority" data-task-id="{{ task.id }}"{% endif %}>{% call m::priority_badge(task.priority) %}</dd>
+
+  <dt>Assignee</dt>
+  <dd>{% if let Some(a) = task.assignee.as_deref() %}{{ a }}{% else %}<span class="muted">Unassigned</span>{% endif %}</dd>
+
+  <dt>Epic</dt>
+  <dd>{% if let Some(p) = parent.as_ref() %}<a href="/epics/{{ p.id }}" class="epic-badge">{{ p.id }}: {{ p.title }}</a>{% else %}<span class="muted">None</span>{% endif %}</dd>
+
+  <dt>Tags</dt>
+  <dd{% if editable %} data-editable data-field="tags" data-task-id="{{ task.id }}"{% endif %}>{% for tag in &task.tags %}<span class="tag-pill">{{ tag }}</span> {% endfor %}{% if task.tags.is_empty() %}<span class="muted empty-value">None</span>{% endif %}</dd>
+
+  <dt>Workspace</dt>
+  <dd class="task-workspace" data-task-id="{{ task.id }}">
+    {% if let Some(w) = ws.as_ref() %}
+    <span class="ws-line"><span class="badge ws-badge{% if w.missing %} ws-missing{% endif %}">{{ w.name }}{% if w.missing %} · missing{% endif %}{% if w.archived %} · archived{% endif %}</span> <span class="ws-project">{{ w.project_name }}</span></span>
+    <span class="ws-path" title="{{ w.path }}">{{ w.path }}</span>
+    {% if w.missing %}<span class="ws-missing-note">This workspace's path no longer exists. The task stays in its project; move it to another workspace if needed.</span>{% endif %}
+    {% else %}
+    <span class="muted ws-none">none</span>
+    {% endif %}
+    {% if !ws_groups.is_empty() %}
+    <span class="ws-move">
+      <select class="workspace-move-select" data-task-id="{{ task.id }}" aria-label="Move to workspace" title="Changing the workspace moves this task and all of its subtasks.">
+        <option value=""{% if ws.is_none() %} selected{% endif %}>Move to… (none, unscoped)</option>
+        {% for g in ws_groups.iter() %}
+        <optgroup label="{{ g.project_name }}">
+          {% for o in g.options.iter() %}
+          <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.name }}{% if o.missing %} (missing){% endif %}{% if o.archived %} (archived){% endif %}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </span>
+    {% endif %}
+  </dd>
+
+  <dt>Created</dt>
+  <dd><time datetime="{{ task.created_at.to_rfc3339() }}" title="{{ task.created_at.format("%Y-%m-%d %H:%M:%S UTC") }}">{{ task.created_at.format("%b %d, %Y %H:%M") }}</time></dd>
+
+  <dt>Updated</dt>
+  <dd><time datetime="{{ task.updated_at.to_rfc3339() }}" title="{{ task.updated_at.format("%Y-%m-%d %H:%M:%S UTC") }}">{{ updated_rel }}</time></dd>
+
+  {% if let Some(r) = task.close_reason.as_deref() %}
+  <dt>Close reason</dt>
+  <dd>{{ r }}</dd>
+  {% endif %}
+</dl>

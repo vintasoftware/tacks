@@ -205,7 +205,7 @@
           wsEl('p', 'This hides the workspace and its ' + plural(n, 'open task', 'open tasks') +
             ' (plus any done tasks) from the web UI: sidebar, boards, lists, epics and counts.'),
           wsEl('p', 'Nothing is deleted. Tasks keep their status, comments and notes, and the files on disk are not touched.'),
-          wsEl('p', 'You can bring it back with "Restore" in the Archived group of the sidebar, or by running tk in that directory again.')
+          wsEl('p', 'You can bring it back with "Restore" in the Archived group of the sidebar, or it comes back automatically when a task is created there (tk create) or moved there (tk update --move-to).')
         ],
         confirm: 'Remove workspace',
         danger: true,
@@ -609,6 +609,15 @@
     if (taskId) {
       htmx.ajax('GET', '/tasks/' + taskId, { target: '#task-modal', swap: 'innerHTML' });
     }
+  });
+
+  // Board cards are a single click target: a click anywhere on the card (outside links,
+  // buttons and form controls) opens the task modal, like the title link does.
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var card = e.target.closest && e.target.closest('.board-card[data-task-id]');
+    if (!card || e.target.closest('a, button, input, select, textarea')) return;
+    htmx.ajax('GET', '/tasks/' + card.getAttribute('data-task-id'), { target: '#task-modal', swap: 'innerHTML' });
   });
 
   // Pause HTMX polling swaps while inline editing or dragging is active
@@ -1672,6 +1681,9 @@
   // Extract the "current value" from an editable element's inner text/content.
   // For badge/pill elements we parse the text content; for plain text we use textContent.
   function extractCurrentText(el, field) {
+    // A muted placeholder ("None", "No description") is not a value.
+    var emptyEl = el.querySelector('.empty-value');
+    if (emptyEl && el.textContent.trim() === emptyEl.textContent.trim()) return '';
     if (field === 'tags') {
       // Tags are rendered as multiple .tag-pill spans — collect their text
       var pills = el.querySelectorAll('.tag-pill');

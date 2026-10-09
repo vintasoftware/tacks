@@ -1566,20 +1566,6 @@ a.view-toggle-btn:focus-visible {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  /* Task table: allow horizontal scrolling so layout does not break */
-  table {
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  table thead th:nth-child(5),  /* Tags */
-  table thead th:nth-child(6),  /* Updated */
-  table tbody td:nth-child(5),
-  table tbody td:nth-child(6) {
-    display: none;
-  }
-
   dialog article {
     max-width: 90vw;
     margin: auto;
@@ -1588,8 +1574,18 @@ a.view-toggle-btn:focus-visible {
 
 /* Phones: 480px and below. */
 @media (max-width: 480px) {
-  #board-columns.grid {
-    grid-template-columns: 1fr;
+  /* Board: columns scroll horizontally with snap instead of stacking */
+  .grid.board-grid {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    gap: 8px;
+  }
+  .grid.board-grid > .board-column {
+    flex: 0 0 85vw;
+    min-width: 0;
+    scroll-snap-align: start;
   }
 
   /* Filter bar: two controls per row */
@@ -1598,13 +1594,6 @@ a.view-toggle-btn:focus-visible {
   }
   .filter-bar > .filter-search {
     flex-basis: 100%;
-  }
-
-  table thead th:nth-child(3),  /* Status */
-  table thead th:nth-child(4),  /* Priority */
-  table tbody td:nth-child(3),
-  table tbody td:nth-child(4) {
-    display: none;
   }
 
   dialog article {
@@ -2508,3 +2497,173 @@ main.view-epics {
 .comment-form-actions button { width: auto; margin: 0; }
 .comment-hint { color: var(--pico-muted-color); flex: 1 1 14rem; }
 .comment-error { color: var(--pico-del-color, #c62828); margin: 0.5rem 0 0; font-size: 0.875rem; }
+
+/* ---- UI pass 2: board cards, task table, task detail, progress, create form ---- */
+.muted { color: var(--pico-muted-color, #6b7280); }
+.task-id,
+.col-id,
+.col-id a {
+  font-family: var(--pico-font-family-monospace, monospace);
+  font-size: 12px;
+  color: var(--pico-muted-color, #6b7280);
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+/* Board cards */
+.board-card {
+  position: relative;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.board-card:hover {
+  background-color: color-mix(in srgb, var(--pico-primary, #7c3aed) 6%, var(--pico-card-background-color, transparent));
+  border-color: var(--pico-muted-border-color);
+}
+.board-card-title,
+.board-card-title:hover,
+.board-card-title:focus {
+  display: block;
+  color: var(--pico-color);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.board-card-title:focus-visible { outline: 2px solid var(--pico-primary); outline-offset: 2px; }
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--pico-muted-color, #6b7280);
+}
+.card-meta .pending-comments { margin-left: 0; }
+.card-assignee { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Column headers: flex row so the Done toggle aligns with the other headers */
+.board-column h2,
+.board-column h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.3;
+  min-height: 24px;
+}
+.column-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-height: 0;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+}
+
+/* Task table */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 12px; }
+.table-wrap > table { margin-bottom: 0; }
+.table-wrap th { white-space: nowrap; }
+.col-title { min-width: 14rem; }
+.col-title > [data-editable] { display: inline; }
+.row-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 2px; }
+.row-chips .pending-comments { margin-left: 0; }
+.col-assignee { white-space: nowrap; color: var(--pico-muted-color); }
+.col-ws { white-space: nowrap; }
+
+/* Task detail */
+.task-meta {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0 0 16px;
+  font-size: 14px;
+}
+.task-meta dt { color: var(--pico-muted-color, #6b7280); font-weight: 500; }
+.task-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.task-meta dd.task-workspace { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.task-meta .ws-path {
+  flex-basis: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-size: 12px;
+}
+.task-meta .ws-move { flex-basis: 100%; }
+.task-meta select.workspace-move-select {
+  width: auto;
+  max-width: 100%;
+  min-height: 28px;
+  margin: 2px 0 0;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 12px;
+}
+.detail-section { margin-bottom: 16px; }
+.detail-heading {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pico-muted-color, #6b7280);
+}
+.detail-section .task-description { margin-bottom: 0; }
+.task-notes .markdown-body {
+  padding: 8px 12px;
+  border-left: 3px solid #f59e0b;
+  background-color: color-mix(in srgb, #f59e0b 7%, transparent);
+  border-radius: 0 var(--pico-border-radius) var(--pico-border-radius) 0;
+}
+.dep-list { list-style: none; margin: 0; padding: 0; }
+.dep-list li { display: flex; align-items: center; gap: 6px; padding: 2px 0; margin: 0; min-width: 0; }
+.dep-list .dep-tree-link { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.page-detail .breadcrumb { margin-top: 4px; margin-bottom: 8px; }
+
+/* Comment header: author, time and markers on one left-aligned row */
+.comment-head { justify-content: flex-start; }
+
+/* Epic progress bar */
+.progress { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.progress-bar {
+  display: flex;
+  width: 8rem;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background-color: color-mix(in srgb, var(--pico-muted-color, #6b7280) 25%, transparent);
+}
+.progress-bar .seg { min-width: 0; }
+.seg-done { background-color: #22c55e; }
+.seg-wip { background-color: #f59e0b; }
+.seg-open { background-color: transparent; }
+.progress-text { font-size: 12px; color: var(--pico-muted-color, #6b7280); }
+.epic-progress { margin-bottom: 12px; }
+
+/* Create modal: label above every field, one vertical rhythm */
+.compact-form .form-row { margin-bottom: 12px; }
+.compact-form .form-row > label,
+.compact-form .form-row > .form-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.compact-form .form-row input,
+.compact-form .form-row textarea,
+.compact-form .form-row select { margin-bottom: 0; }
+.compact-form .label-hint { font-weight: 400; color: var(--pico-muted-color); }
+.compact-form .grid { gap: 12px; row-gap: 0; }
+.compact-form .ws-fixed { margin: 0; }
+.compact-form .ws-move-hint { display: block; margin-top: 4px; color: var(--pico-muted-color); }
+
+@media (max-width: 480px) {
+  .task-meta { grid-template-columns: 5.5rem minmax(0, 1fr); }
+}

@@ -29,11 +29,11 @@ Feature: Markdown rendering in web views
     Then the response status is 200
     And the response body contains "markdown-body"
 
-  Scenario: Task detail page shows fallback dash when description is absent
+  Scenario: Task detail page shows a muted placeholder when description is absent
     Given I created a task via API with title "No-desc task" as "nodesc-task"
     When I GET the HTML task "nodesc-task"
     Then the response status is 200
-    And the response body contains "—"
+    And the response body contains "No description"
 
   # ---------------------------------------------------------------------------
   # Task detail modal fragment — HTMX markdown rendering
@@ -45,11 +45,11 @@ Feature: Markdown rendering in web views
     Then the response status is 200
     And the response body contains "<h2>Modal Heading</h2>"
 
-  Scenario: Task modal fragment shows fallback dash when description is absent
+  Scenario: Task modal fragment shows a muted placeholder when description is absent
     Given I created a task via API with title "Modal no-desc task" as "modal-nodesc-task"
     When I HTMX GET the task "modal-nodesc-task"
     Then the response status is 200
-    And the response body contains "—"
+    And the response body contains "No description"
 
   # ---------------------------------------------------------------------------
   # Epic detail page — description markdown rendering

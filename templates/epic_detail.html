@@ -29,36 +29,25 @@
 
 <h1>{{ task.title }}</h1>
 
-<div class="task-meta-row">
-  <span class="meta-item"><span class="meta-label">ID</span> {{ task.id }}</span>
-  <span class="meta-sep">·</span>
-  <span class="meta-item">
-    <span class="badge status-{{ task.status }}">
-      {%- if task.status == crate::models::Status::Open -%}○ Open
-      {%- else if task.status == crate::models::Status::InProgress -%}◐ In Progress
-      {%- else if task.status == crate::models::Status::Done -%}✓ Done
-      {%- else -%}⊘ Blocked{%- endif -%}
-    </span>
-  </span>
-  <span class="meta-sep">·</span>
-  <span class="meta-item">{% call m::priority_badge(task.priority) %}</span>
-  <span class="meta-sep">·</span>
-  <span class="meta-item"><span class="meta-label">Progress</span> <span class="progress-done">{{ children_done }}</span>/<span class="progress-wip">{{ children_in_progress }}</span>/<span class="progress-open">{{ children_open }}</span> <span class="progress-total">({{ children_total }})</span></span>
-  {% if let Some(assignee) = task.assignee.as_deref() %}
-  <span class="meta-sep">·</span>
-  <span class="meta-item"><span class="meta-label">Assignee</span> {{ assignee }}</span>
-  {% endif %}
-  {% if !task.tags.is_empty() %}
-  <span class="meta-sep">·</span>
-  <span class="meta-item">
-    {% for tag in &task.tags %}<span class="tag-pill">{{ tag }}</span>{% endfor %}
-  </span>
-  {% endif %}
-</div>
+<div class="epic-progress">{% call m::progress(children_done, children_in_progress, children_open, children_total) %}</div>
 
-{% if let Some(html) = description_html.as_deref() %}
-<div class="task-description markdown-body">{{ html|safe }}</div>
+{% include "partials/task_meta.html" %}
+
+{% if let Some(html) = notes_html.as_deref() %}
+<section class="detail-section task-notes">
+  <h4 class="detail-heading">Agent notes</h4>
+  <div class="markdown-body">{{ html|safe }}</div>
+</section>
 {% endif %}
+
+<section class="detail-section">
+  <h4 class="detail-heading">Description</h4>
+  {% if let Some(html) = description_html.as_deref() %}
+  <div class="task-description markdown-body">{{ html|safe }}</div>
+  {% else %}
+  <div class="task-description"><span class="muted">No description</span></div>
+  {% endif %}
+</section>
 
 <hr class="view-toggle-divider">
 
@@ -102,6 +91,7 @@
 {% if children.is_empty() %}
 <p>No subtasks yet.</p>
 {% else %}
+<div class="table-wrap">
 <table>
   <thead>
     <tr>
@@ -114,7 +104,7 @@
   <tbody>
     {% for child in &children %}
     <tr>
-      <td><a href="/tasks/{{ child.id }}" hx-select="unset">{{ child.id }}</a></td>
+      <td class="col-id"><a href="/tasks/{{ child.id }}" hx-select="unset">{{ child.id }}</a></td>
       <td>{{ child.title }}</td>
       <td>
         <span class="badge status-{{ child.status }}">
@@ -129,6 +119,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% else %}
@@ -136,21 +127,12 @@
 {% if children.is_empty() %}
 <p>No subtasks yet.</p>
 {% else %}
-<div class="grid">
+<div class="grid board-grid">
   <div class="board-column" data-status="open">
     <h3>Open <span class="column-count">({{ board_open_count }})</span></h3>
     {% for child in &children %}
     {%- if child.status == crate::models::Status::Open -%}
-    <article class="board-card" draggable="true" data-task-id="{{ child.id }}">
-      <div class="board-card-header">
-        <a href="/tasks/{{ child.id }}"
-           hx-get="/tasks/{{ child.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ child.title }}</a>
-        {% call m::priority_badge(child.priority) %}
-      </div>
-    </article>
+    {% call m::epic_board_card(child) %}
     {%- endif -%}
     {% endfor %}
   </div>
@@ -158,16 +140,7 @@
     <h3>In Progress <span class="column-count">({{ board_in_progress_count }})</span></h3>
     {% for child in &children %}
     {%- if child.status == crate::models::Status::InProgress -%}
-    <article class="board-card" draggable="true" data-task-id="{{ child.id }}">
-      <div class="board-card-header">
-        <a href="/tasks/{{ child.id }}"
-           hx-get="/tasks/{{ child.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ child.title }}</a>
-        {% call m::priority_badge(child.priority) %}
-      </div>
-    </article>
+    {% call m::epic_board_card(child) %}
     {%- endif -%}
     {% endfor %}
   </div>
@@ -175,16 +148,7 @@
     <h3>Blocked <span class="column-count">({{ board_blocked_count }})</span></h3>
     {% for child in &children %}
     {%- if child.status == crate::models::Status::Blocked -%}
-    <article class="board-card" draggable="true" data-task-id="{{ child.id }}">
-      <div class="board-card-header">
-        <a href="/tasks/{{ child.id }}"
-           hx-get="/tasks/{{ child.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ child.title }}</a>
-        {% call m::priority_badge(child.priority) %}
-      </div>
-    </article>
+    {% call m::epic_board_card(child) %}
     {%- endif -%}
     {% endfor %}
   </div>
@@ -196,16 +160,7 @@
     <div class="column-cards">
     {% for child in &children %}
     {%- if child.status == crate::models::Status::Done -%}
-    <article class="board-card" draggable="true" data-task-id="{{ child.id }}">
-      <div class="board-card-header">
-        <a href="/tasks/{{ child.id }}"
-           hx-get="/tasks/{{ child.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ child.title }}</a>
-        {% call m::priority_badge(child.priority) %}
-      </div>
-    </article>
+    {% call m::epic_board_card(child) %}
     {%- endif -%}
     {% endfor %}
     </div>

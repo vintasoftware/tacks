@@ -8,63 +8,6 @@
     </div>
   </header>
 
-  <div class="task-meta-row">
-    <span class="meta-item"><span class="meta-label">ID</span> {{ task.id }}</span>
-    <span class="meta-sep">·</span>
-    <span class="meta-item" data-editable data-field="status" data-task-id="{{ task.id }}">
-      <span class="badge status-{{ task.status }}">
-        {%- if task.status == crate::models::Status::Open -%}○ Open
-        {%- else if task.status == crate::models::Status::InProgress -%}◐ In Progress
-        {%- else if task.status == crate::models::Status::Done -%}✓ Done
-        {%- else -%}⊘ Blocked{%- endif -%}
-      </span>
-    </span>
-    <span class="meta-sep">·</span>
-    <span class="meta-item" data-editable data-field="priority" data-task-id="{{ task.id }}">{% call m::priority_badge(task.priority) %}</span>
-    {% if let Some(p) = parent.as_ref() %}
-    <span class="meta-sep">·</span>
-    <span class="meta-item"><span class="meta-label">Epic</span> <a href="/epics/{{ p.id }}" class="epic-badge">{{ p.id }}: {{ p.title }}</a></span>
-    {% endif %}
-    <span class="meta-sep">·</span>
-    <span class="meta-item" data-editable data-field="tags" data-task-id="{{ task.id }}">
-      {% for tag in &task.tags %}<span class="tag-pill">{{ tag }}</span>{% endfor %}
-      {% if task.tags.is_empty() %}<span class="meta-label">Tags</span> —{% endif %}
-    </span>
-    <span class="meta-sep">·</span>
-    <span class="meta-item"><span class="meta-label">Updated</span> {{ task.updated_at.format("%b %d, %Y %H:%M") }}</span>
-  </div>
-
-  {% include "partials/task_workspace.html" %}
-
-  {% if let Some(html) = description_html.as_deref() %}
-  <div class="task-description markdown-body" data-editable data-field="description" data-task-id="{{ task.id }}">{{ html|safe }}</div>
-  {% else %}
-  <div class="task-description" data-editable data-field="description" data-task-id="{{ task.id }}">—</div>
-  {% endif %}
-
-  {% if !blockers.is_empty() || !dependents.is_empty() %}
-  <section class="dep-tree-section">
-    <details>
-      <summary>Dependencies</summary>
-      <div class="dep-tree-subsection">
-        <h4>Blocked by</h4>
-        <div hx-get="/tasks/{{ task.id }}/dep-tree?dir=up"
-             hx-trigger="revealed"
-             hx-swap="innerHTML">
-          <p class="dep-tree-empty">Loading…</p>
-        </div>
-      </div>
-      <div class="dep-tree-subsection">
-        <h4>Blocks</h4>
-        <div hx-get="/tasks/{{ task.id }}/dep-tree?dir=down"
-             hx-trigger="revealed"
-             hx-swap="innerHTML">
-          <p class="dep-tree-empty">Loading…</p>
-        </div>
-      </div>
-    </details>
-  </section>
-  {% endif %}
-
-  {% include "partials/comments_section.html" %}
+  {% include "partials/task_meta.html" %}
+  {% include "partials/task_body.html" %}
 </article>

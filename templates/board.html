@@ -57,7 +57,7 @@
   </div>
 </form>
 
-<div class="grid" id="board-columns"
+<div class="grid board-grid" id="board-columns"
      hx-get="{{ layout.prefix }}/board{{ poll_query }}"
      hx-trigger="every 2s [document.visibilityState === 'visible']"
      hx-target="#board-columns"
@@ -67,81 +67,15 @@
      aria-atomic="false">
   <div class="board-column" data-status="open">
     <h2>Open <span class="column-count">({{ open_tasks.len() }})</span></h2>
-    {% for row in open_tasks %}
-    <article class="board-card" draggable="true" data-task-id="{{ row.task.id }}" tabindex="0" data-shortcut="Shift+→ to move right">
-      <div class="board-card-header">
-        <a href="/tasks/{{ row.task.id }}"
-           hx-get="/tasks/{{ row.task.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ row.task.title }}</a>
-        {% call m::priority_badge(row.task.priority) %}
-      </div>
-      {% if row.pending_count > 0 %}
-      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
-      {% endif %}
-      {% if row.workspace.is_some() %}
-      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
-      {% endif %}
-      {% if row.blocked_count > 0 %}
-      <div class="board-card-blocked">
-        <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
-      </div>
-      {% endif %}
-    </article>
-    {% endfor %}
+    {% for row in open_tasks %}{% call m::board_card(row, "Shift+→ to move right") %}{% endfor %}
   </div>
   <div class="board-column" data-status="in_progress">
     <h2>In Progress <span class="column-count">({{ in_progress_tasks.len() }})</span></h2>
-    {% for row in in_progress_tasks %}
-    <article class="board-card" draggable="true" data-task-id="{{ row.task.id }}" tabindex="0" data-shortcut="Shift+←/→ to move">
-      <div class="board-card-header">
-        <a href="/tasks/{{ row.task.id }}"
-           hx-get="/tasks/{{ row.task.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ row.task.title }}</a>
-        {% call m::priority_badge(row.task.priority) %}
-      </div>
-      {% if row.pending_count > 0 %}
-      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
-      {% endif %}
-      {% if row.workspace.is_some() %}
-      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
-      {% endif %}
-      {% if row.blocked_count > 0 %}
-      <div class="board-card-blocked">
-        <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
-      </div>
-      {% endif %}
-    </article>
-    {% endfor %}
+    {% for row in in_progress_tasks %}{% call m::board_card(row, "Shift+←/→ to move") %}{% endfor %}
   </div>
   <div class="board-column" data-status="blocked">
     <h2>Blocked <span class="column-count">({{ blocked_tasks.len() }})</span></h2>
-    {% for row in blocked_tasks %}
-    <article class="board-card" draggable="true" data-task-id="{{ row.task.id }}" tabindex="0">
-      <div class="board-card-header">
-        <a href="/tasks/{{ row.task.id }}"
-           hx-get="/tasks/{{ row.task.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ row.task.title }}</a>
-        {% call m::priority_badge(row.task.priority) %}
-      </div>
-      {% if row.pending_count > 0 %}
-      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
-      {% endif %}
-      {% if row.workspace.is_some() %}
-      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
-      {% endif %}
-      {% if row.blocked_count > 0 %}
-      <div class="board-card-blocked">
-        <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
-      </div>
-      {% endif %}
-    </article>
-    {% endfor %}
+    {% for row in blocked_tasks %}{% call m::board_card(row, "") %}{% endfor %}
   </div>
   <div class="board-column" data-status="done">
     <h2>
@@ -149,29 +83,7 @@
       Done <span class="column-count">({{ done_tasks.len() }})</span>
     </h2>
     <div class="column-cards">
-    {% for row in done_tasks %}
-    <article class="board-card" draggable="true" data-task-id="{{ row.task.id }}" tabindex="0" data-shortcut="Shift+← to move left">
-      <div class="board-card-header">
-        <a href="/tasks/{{ row.task.id }}"
-           hx-get="/tasks/{{ row.task.id }}"
-           hx-target="#task-modal"
-           hx-select="unset"
-           hx-swap="innerHTML">{{ row.task.title }}</a>
-        {% call m::priority_badge(row.task.priority) %}
-      </div>
-      {% if row.pending_count > 0 %}
-      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
-      {% endif %}
-      {% if row.workspace.is_some() %}
-      <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
-      {% endif %}
-      {% if row.blocked_count > 0 %}
-      <div class="board-card-blocked">
-        <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
-      </div>
-      {% endif %}
-    </article>
-    {% endfor %}
+    {% for row in done_tasks %}{% call m::board_card(row, "Shift+← to move left") %}{% endfor %}
     </div>
   </div>
 </div>

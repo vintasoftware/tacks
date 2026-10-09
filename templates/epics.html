@@ -52,6 +52,7 @@
   </div>
 </form>
 
+<div class="table-wrap">
 <table>
   <thead>
     <tr>
@@ -70,7 +71,7 @@
     {% else %}
     {% for ep in epics %}
     <tr>
-      <td><a href="{{ layout.prefix }}/epics/{{ ep.task.id }}">{{ ep.task.id }}</a></td>
+      <td class="col-id"><a href="{{ layout.prefix }}/epics/{{ ep.task.id }}">{{ ep.task.id }}</a></td>
       <td>{{ ep.task.title }} {% if let Some(ws) = ep.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</td>
       <td><span class="badge status-{{ ep.task.status }}">
         {%- if ep.task.status == crate::models::Status::Open -%}○ Open
@@ -79,11 +80,12 @@
         {%- else -%}⊘ Blocked{%- endif -%}
       </span></td>
       <td>{% call m::priority_badge(ep.task.priority) %}</td>
-      <td><span class="progress-done">{{ ep.children_done }}</span>/<span class="progress-wip">{{ ep.children_in_progress }}</span>/<span class="progress-open">{{ ep.children_open }}</span> <span class="progress-total">({{ ep.children_total }})</span></td>
+      <td>{% call m::progress(ep.children_done, ep.children_in_progress, ep.children_open, ep.children_total) %}</td>
     </tr>
     {% endfor %}
     {% endif %}
   </tbody>
 </table>
+</div>
 </div>
 {% endblock %}

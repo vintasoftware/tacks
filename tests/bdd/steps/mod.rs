@@ -21,4 +21,5 @@ pub mod task_steps;
 pub mod web_api_steps;
 pub mod web_security_steps;
 pub mod web_steps;
+pub mod web_workspace_action_steps;
 pub mod workspace_steps;

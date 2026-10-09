@@ -44,6 +44,7 @@ tests/
     children.feature          epic_status.feature
     blocked.feature           parent_filter.feature
     workspace_scoping.feature web_workspaces.feature
+    web_workspace_actions.feature
     workspace_guard.feature   agent_hook.feature
     (plus web/API features: serve, web_api, web_views, web_security, user_feedback, ...)
   bdd/

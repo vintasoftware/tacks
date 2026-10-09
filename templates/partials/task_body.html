@@ -1,0 +1,74 @@
+{% import "macros.html" as m %}
+{# Sections of the task detail, shared by the full page and the modal. #}
+{% if let Some(html) = notes_html.as_deref() %}
+<section class="detail-section task-notes">
+  <h4 class="detail-heading">Agent notes</h4>
+  <div class="markdown-body">{{ html|safe }}</div>
+</section>
+{% endif %}
+
+<section class="detail-section">
+  <h4 class="detail-heading">Description</h4>
+  {% if let Some(html) = description_html.as_deref() %}
+  <div class="task-description markdown-body" data-editable data-field="description" data-task-id="{{ task.id }}">{{ html|safe }}</div>
+  {% else %}
+  <div class="task-description" data-editable data-field="description" data-task-id="{{ task.id }}"><span class="muted empty-value">No description</span></div>
+  {% endif %}
+</section>
+
+{% if !blockers.is_empty() %}
+<section class="detail-section">
+  <h4 class="detail-heading">Blocked by</h4>
+  <ul class="dep-list">
+    {% for b in &blockers %}
+    <li><span class="dep-status-dot dep-status-{{ b.status }}"></span><a href="/tasks/{{ b.id }}" class="dep-tree-link"><span class="task-id">{{ b.id }}</span> {{ b.title }}</a> {% call m::status_badge(b.status) %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if !dependents.is_empty() %}
+<section class="detail-section">
+  <h4 class="detail-heading">Blocks</h4>
+  <ul class="dep-list">
+    {% for d in &dependents %}
+    <li><span class="dep-status-dot dep-status-{{ d.status }}"></span><a href="/tasks/{{ d.id }}" class="dep-tree-link"><span class="task-id">{{ d.id }}</span> {{ d.title }}</a> {% call m::status_badge(d.status) %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if !blockers.is_empty() || !dependents.is_empty() %}
+<section class="dep-tree-section">
+  <details>
+    <summary>Dependency tree</summary>
+    <div class="dep-tree-subsection">
+      <h4>Blocked by</h4>
+      <div hx-get="/tasks/{{ task.id }}/dep-tree?dir=up"
+           hx-trigger="revealed"
+           hx-swap="innerHTML">
+        <p class="dep-tree-empty">Loading…</p>
+      </div>
+    </div>
+    <div class="dep-tree-subsection">
+      <h4>Blocks</h4>
+      <div hx-get="/tasks/{{ task.id }}/dep-tree?dir=down"
+           hx-trigger="revealed"
+           hx-swap="innerHTML">
+        <p class="dep-tree-empty">Loading…</p>
+      </div>
+    </div>
+  </details>
+</section>
+{% endif %}
+
+{% if !children.is_empty() %}
+<section class="detail-section">
+  <h4 class="detail-heading">Subtasks</h4>
+  <ul class="dep-list">
+    {% for c in &children %}
+    <li><span class="dep-status-dot dep-status-{{ c.status }}"></span><a href="/tasks/{{ c.id }}" class="dep-tree-link"><span class="task-id">{{ c.id }}</span> {{ c.title }}</a> {% call m::status_badge(c.status) %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% include "partials/comments_section.html" %}

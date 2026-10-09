@@ -2,3 +2,59 @@
 {% macro priority_badge(p) %}<span class="badge priority-{{ p }}">{%- if p == 0 -%}▲▲ P0{%- else if p == 1 -%}▲ P1{%- else if p == 2 -%}▬ P2{%- else if p == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}</span>{% endmacro %}
 
 {% macro pending_badge(n) %}<span class="pending-comments" title="{{ n }} user comment{% if n != 1 %}s{% endif %} awaiting agent reply" aria-label="{{ n }} user comment{% if n != 1 %}s{% endif %} awaiting agent reply">💬 {{ n }}</span>{% endmacro %}
+
+{% macro status_badge(s) %}<span class="badge status-{{ s }}">
+  {%- if s == crate::models::Status::Open -%}○ Open
+  {%- else if s == crate::models::Status::InProgress -%}◐ In Progress
+  {%- else if s == crate::models::Status::Done -%}✓ Done
+  {%- else -%}⊘ Blocked{%- endif -%}
+</span>{% endmacro %}
+
+{% macro blocked_chip(row) %}{% if row.blocked_count > 0 %}<span class="badge dep-blocked" title="Blocked by {{ row.blockers.join(", ") }}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ blocked by {{ row.blocked_count }}</span>{% endif %}{% endmacro %}
+
+{# Board card: the whole card opens the modal (click handled in app.js; the title link is the keyboard/no-JS target). #}
+{% macro board_card(row, shortcut) %}
+<article class="board-card" draggable="true" data-task-id="{{ row.task.id }}" tabindex="0"{% if !shortcut.is_empty() %} data-shortcut="{{ shortcut }}"{% endif %}>
+  <a class="board-card-title" href="/tasks/{{ row.task.id }}"
+     hx-get="/tasks/{{ row.task.id }}"
+     hx-target="#task-modal"
+     hx-select="unset"
+     hx-swap="innerHTML">{{ row.task.title }}</a>
+  <div class="card-meta">
+    <span class="task-id">{{ row.task.id }}</span>
+    {% call priority_badge(row.task.priority) %}
+    {% if let Some(a) = row.task.assignee.as_deref() %}<span class="card-assignee" title="Assignee">{{ a }}</span>{% endif %}
+    {% if let Some(ws) = row.workspace.as_ref() %}{% call ws_badge(ws) %}{% endif %}
+    {% if row.pending_count > 0 %}{% call pending_badge(row.pending_count) %}{% endif %}
+    {% call blocked_chip(row) %}
+  </div>
+</article>
+{% endmacro %}
+
+{# Card for the epic detail board (plain tasks, no row extras). #}
+{% macro epic_board_card(task) %}
+<article class="board-card" draggable="true" data-task-id="{{ task.id }}" tabindex="0">
+  <a class="board-card-title" href="/tasks/{{ task.id }}"
+     hx-get="/tasks/{{ task.id }}"
+     hx-target="#task-modal"
+     hx-select="unset"
+     hx-swap="innerHTML">{{ task.title }}</a>
+  <div class="card-meta">
+    <span class="task-id">{{ task.id }}</span>
+    {% call priority_badge(task.priority) %}
+    {% if let Some(a) = task.assignee.as_deref() %}<span class="card-assignee" title="Assignee">{{ a }}</span>{% endif %}
+  </div>
+</article>
+{% endmacro %}
+
+{# Epic progress: segmented bar (done / in progress / open) plus "N of M done". #}
+{% macro progress(done, wip, open, total) %}
+<span class="progress" title="{{ done }} done, {{ wip }} in progress, {{ open }} open">
+  {% if total > 0 %}
+  <span class="progress-bar" role="img" aria-label="{{ done }} of {{ total }} done, {{ wip }} in progress, {{ open }} open"><span class="seg seg-done" style="flex-grow: {{ done }}"></span><span class="seg seg-wip" style="flex-grow: {{ wip }}"></span><span class="seg seg-open" style="flex-grow: {{ open }}"></span></span>
+  <span class="progress-text">{{ done }} of {{ total }} done</span>
+  {% else %}
+  <span class="progress-text">No subtasks</span>
+  {% endif %}
+</span>
+{% endmacro %}

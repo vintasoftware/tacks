@@ -79,13 +79,16 @@
   </div>
 </form>
 
-<table>
+<div class="table-wrap">
+<table class="task-table">
   <thead>
     <tr>
       <th>ID</th>
       <th>Title</th>
       <th>Status</th>
       <th>Priority</th>
+      {% if show_ws %}<th>Workspace</th>{% endif %}
+      <th>Assignee</th>
       <th>Tags</th>
       <th>Updated</th>
     </tr>
@@ -98,7 +101,7 @@
          aria-atomic="false">
     {% if tasks.is_empty() %}
     <tr>
-      <td colspan="6" style="text-align:center;color:var(--pico-muted-color);padding:2rem 0">
+      <td colspan="{% if show_ws %}8{% else %}7{% endif %}" style="text-align:center;color:var(--pico-muted-color);padding:2rem 0">
         {%- if has_filters -%}
         No tasks match your filters
         {%- else -%}
@@ -109,38 +112,37 @@
     {% else %}
     {% for row in tasks %}
     <tr tabindex="-1" data-href="/tasks/{{ row.task.id }}">
-      <td><a href="/tasks/{{ row.task.id }}"
+      <td class="col-id"><a href="/tasks/{{ row.task.id }}"
              hx-get="/tasks/{{ row.task.id }}"
              hx-target="#task-modal"
              hx-select="unset"
              hx-swap="innerHTML">{{ row.task.id }}</a></td>
-      <td>
+      <td class="col-title">
         <span data-editable data-field="title" data-task-id="{{ row.task.id }}">{{ row.task.title }}</span>
-        {% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}
-        {% if row.blocked_count > 0 %}
-        <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
-        {% endif %}
-        {% if row.pending_count > 0 %}{% call m::pending_badge(row.pending_count) %}{% endif %}
-        {% if row.children_total > 0 %}
-        <span class="subtask-count" title="{{ row.children_done }} of {{ row.children_total }} subtasks done">{{ row.children_done }}/{{ row.children_total }}</span>
-        {% endif %}
-        {% if let (Some(pid), Some(ptitle)) = (row.parent_id.as_deref(), row.parent_title.as_deref()) %}
-        <a href="{{ layout.prefix }}/epics/{{ pid }}" class="epic-badge">{{ pid }}: {{ ptitle }}</a>
+        {% if row.blocked_count > 0 || row.pending_count > 0 || row.children_total > 0 || row.parent_id.is_some() %}
+        <div class="row-chips">
+          {% if let (Some(pid), Some(ptitle)) = (row.parent_id.as_deref(), row.parent_title.as_deref()) %}
+          <a href="{{ layout.prefix }}/epics/{{ pid }}" class="epic-badge">{{ pid }}: {{ ptitle }}</a>
+          {% endif %}
+          {% call m::blocked_chip(row) %}
+          {% if row.pending_count > 0 %}{% call m::pending_badge(row.pending_count) %}{% endif %}
+          {% if row.children_total > 0 %}
+          <span class="subtask-count" title="{{ row.children_done }} of {{ row.children_total }} subtasks done">{{ row.children_done }}/{{ row.children_total }}</span>
+          {% endif %}
+        </div>
         {% endif %}
       </td>
-      <td data-editable data-field="status" data-task-id="{{ row.task.id }}"><span class="badge status-{{ row.task.status }}">
-        {%- if row.task.status == crate::models::Status::Open -%}○ Open
-        {%- else if row.task.status == crate::models::Status::InProgress -%}◐ In Progress
-        {%- else if row.task.status == crate::models::Status::Done -%}✓ Done
-        {%- else -%}⊘ Blocked{%- endif -%}
-      </span></td>
+      <td data-editable data-field="status" data-task-id="{{ row.task.id }}">{% call m::status_badge(row.task.status) %}</td>
       <td data-editable data-field="priority" data-task-id="{{ row.task.id }}">{% call m::priority_badge(row.task.priority) %}</td>
+      {% if show_ws %}<td class="col-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}
+      <td class="col-assignee">{% if let Some(a) = row.task.assignee.as_deref() %}{{ a }}{% else %}<span class="muted">—</span>{% endif %}</td>
       <td data-editable data-field="tags" data-task-id="{{ row.task.id }}">{% for tag in &row.task.tags %}<span class="tag-pill">{{ tag }}</span> {% endfor %}</td>
-      <td class="col-updated">{{ row.task.updated_at.format("%b %d %H:%M") }}</td>
+      <td class="col-updated"><time datetime="{{ row.task.updated_at.to_rfc3339() }}" title="{{ row.updated_abs }}">{{ row.updated_rel }}</time></td>
     </tr>
     {% endfor %}
     {% endif %}
   </tbody>
 </table>
+</div>
 </div>
 {% endblock %}

@@ -1033,6 +1033,12 @@ struct TaskRow {
     children_total: usize,
     /// Number of open (non-done) blockers for this task.
     blocked_count: usize,
+    /// Open blockers as `id: title` strings (tooltip text).
+    blockers: Vec<String>,
+    /// Relative last-update time ("2h ago").
+    updated_rel: String,
+    /// Absolute last-update time (tooltip).
+    updated_abs: String,
     /// Workspace of the task, set only in project and All scopes (shown as a badge).
     workspace: Option<WsInfo>,
     /// Number of user comments awaiting an agent reply.
@@ -1046,7 +1052,7 @@ impl TaskRow {
         task: Task,
         parents: &std::collections::HashMap<String, Task>,
         child_counts: &std::collections::HashMap<String, (usize, usize)>,
-        blocker_counts: &std::collections::HashMap<String, usize>,
+        blocker_map: &std::collections::HashMap<String, Vec<String>>,
     ) -> Self {
         let parent_id = task.parent_id.clone();
         let parent_title = parent_id
@@ -1054,7 +1060,10 @@ impl TaskRow {
             .and_then(|pid| parents.get(pid))
             .map(|p| p.title.clone());
         let (children_done, children_total) = child_counts.get(&task.id).copied().unwrap_or((0, 0));
-        let blocked_count = blocker_counts.get(&task.id).copied().unwrap_or(0);
+        let blockers = blocker_map.get(&task.id).cloned().unwrap_or_default();
+        let blocked_count = blockers.len();
+        let updated_rel = relative_time(task.updated_at, chrono::Utc::now());
+        let updated_abs = task.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
         TaskRow {
             task,
             parent_id,
@@ -1062,6 +1071,9 @@ impl TaskRow {
             children_done,
             children_total,
             blocked_count,
+            blockers,
+            updated_rel,
+            updated_abs,
             workspace: None,
             pending_count: 0,
         }
@@ -1119,28 +1131,48 @@ fn fetch_child_counts(
     Ok(map)
 }
 
-/// Batch-fetch the count of open (non-done) blockers for a list of task IDs.
+/// Format a timestamp relative to `now` ("just now", "5m ago", "2h ago", "3d ago").
+/// Older than 30 days falls back to a short absolute date.
+fn relative_time(
+    then: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let secs = (now - then).num_seconds();
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else if secs < 30 * 86_400 {
+        format!("{}d ago", secs / 86_400)
+    } else {
+        then.format("%b %d, %Y").to_string()
+    }
+}
+
+/// Batch-fetch the open (non-done) blockers for a list of task IDs.
 ///
-/// Returns a map of `task_id -> open_blocker_count` for tasks that have at least one
-/// open blocker.  Tasks with no open blockers are absent from the map (callers should
-/// default to `0`).
-fn fetch_blocker_counts(
+/// Returns a map of `task_id -> ["blocker-id: title", ...]` for tasks that have at least
+/// one open blocker.  Tasks with no open blockers are absent from the map (callers should
+/// default to empty).
+fn fetch_open_blockers(
     db: &crate::db::Database,
     task_ids: &[String],
-) -> Result<std::collections::HashMap<String, usize>, String> {
+) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     let mut map = std::collections::HashMap::new();
     for id in task_ids {
         let blocker_deps = db.get_blockers(id)?;
-        let mut open_count = 0usize;
+        let mut open = Vec::new();
         for dep in &blocker_deps {
             if let Some(blocker) = db.get_task(&dep.parent_id)?
                 && !matches!(blocker.status, crate::models::Status::Done)
             {
-                open_count += 1;
+                open.push(format!("{}: {}", blocker.id, blocker.title));
             }
         }
-        if open_count > 0 {
-            map.insert(id.clone(), open_count);
+        if !open.is_empty() {
+            map.insert(id.clone(), open);
         }
     }
     Ok(map)
@@ -1165,6 +1197,8 @@ struct TaskListTemplate {
     has_filters: bool,
     /// Pre-built query string for HTMX polling (preserves current filters).
     poll_query: String,
+    /// True in project and All scopes: the list shows a Workspace column.
+    show_ws: bool,
 }
 
 /// A comment prepared for display: sanitized HTML body and pending state.
@@ -1251,6 +1285,14 @@ struct TaskDetailTemplate {
     comment_views: Vec<CommentView>,
     /// Pre-rendered HTML for the task description (markdown → sanitized HTML).
     description_html: Option<String>,
+    /// Pre-rendered HTML for the agent notes (markdown → sanitized HTML).
+    notes_html: Option<String>,
+    /// Subtasks of this task (shown for epics).
+    children: Vec<Task>,
+    /// Relative last-update time ("2h ago").
+    updated_rel: String,
+    /// Metadata fields are inline-editable (true on task detail).
+    editable: bool,
 }
 
 /// Template for the task detail modal fragment loaded via HTMX.
@@ -1271,6 +1313,14 @@ struct TaskDetailFragmentTemplate {
     comment_views: Vec<CommentView>,
     /// Pre-rendered HTML for the task description (markdown → sanitized HTML).
     description_html: Option<String>,
+    /// Pre-rendered HTML for the agent notes (markdown → sanitized HTML).
+    notes_html: Option<String>,
+    /// Subtasks of this task (shown for epics).
+    children: Vec<Task>,
+    /// Relative last-update time ("2h ago").
+    updated_rel: String,
+    /// Metadata fields are inline-editable (true on task detail).
+    editable: bool,
 }
 
 /// Template for the kanban board page at GET /board.
@@ -1371,6 +1421,18 @@ struct EpicDetailTemplate {
     poll_query: String,
     /// Pre-rendered HTML for the epic description (markdown → HTML, safe to output unescaped).
     description_html: Option<String>,
+    /// Pre-rendered HTML for the agent notes.
+    notes_html: Option<String>,
+    /// Workspace of the epic, if any.
+    ws: Option<WsInfo>,
+    /// Empty on epic detail: the move selector is not offered there (the page polls).
+    ws_groups: Vec<WsGroup>,
+    /// Parent of the epic (never set; shared metadata partial expects it).
+    parent: Option<Task>,
+    /// Relative last-update time.
+    updated_rel: String,
+    /// Metadata is read-only on epic detail (the page re-renders on a poll).
+    editable: bool,
 }
 
 /// Query parameters for GET /epics/:id.
@@ -1465,6 +1527,7 @@ pub async fn task_list(
     let db = state.db.clone();
     let scope_filter = scope.filter;
     let row_scope = scope.clone();
+    let show_ws = scope.show_workspace_badge();
     let (task_rows, all_tags) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<TaskRow>, Vec<String>), String> {
             let db = db.lock().unwrap();
@@ -1511,12 +1574,12 @@ pub async fn task_list(
             // Batch-fetch child counts so we can show subtask progress on parent tasks
             let task_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
             let child_counts = fetch_child_counts(&db, &task_ids)?;
-            let blocker_counts = fetch_blocker_counts(&db, &task_ids)?;
+            let blocker_map = fetch_open_blockers(&db, &task_ids)?;
             let pending = db.pending_user_comment_count_by_task(&scope_filter)?;
             let rows: Vec<TaskRow> = tasks
                 .into_iter()
                 .map(|t| {
-                    TaskRow::from_task(t, &parents, &child_counts, &blocker_counts)
+                    TaskRow::from_task(t, &parents, &child_counts, &blocker_map)
                         .with_workspace(&row_scope)
                         .with_pending(&pending)
                 })
@@ -1551,6 +1614,7 @@ pub async fn task_list(
         search_filter: params.search,
         has_filters: has_filter,
         poll_query,
+        show_ws,
     })
 }
 
@@ -1704,6 +1768,8 @@ struct TaskDetailData {
     comments: Vec<Comment>,
     /// Ids of user comments awaiting an agent reply.
     pending_ids: Vec<i64>,
+    /// Subtasks, ordered by hierarchical id suffix.
+    children: Vec<Task>,
 }
 
 /// GET /tasks/:id — Task detail page (200 or 404).
@@ -1745,6 +1811,12 @@ pub async fn task_detail(
             .iter()
             .map(|c| c.id)
             .collect();
+        let mut children = db.get_children(&id)?;
+        children.sort_by_key(|c| {
+            c.id.rfind('.')
+                .and_then(|pos| c.id[pos + 1..].parse::<u64>().ok())
+                .unwrap_or(0)
+        });
         Ok(Some(TaskDetailData {
             task,
             parent,
@@ -1752,6 +1824,7 @@ pub async fn task_detail(
             dependents,
             comments,
             pending_ids,
+            children,
         }))
     })
     .await
@@ -1762,6 +1835,13 @@ pub async fn task_detail(
             // Pre-render description and comment bodies from markdown to HTML.
             // The |safe filter in the template prevents double-escaping.
             let description_html = data.task.description.as_deref().map(render_markdown);
+            let notes_html = data
+                .task
+                .notes
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .map(render_markdown);
+            let updated_rel = relative_time(data.task.updated_at, chrono::Utc::now());
             let comment_views = build_comment_views(data.comments, &data.pending_ids);
             let ws = data.task.workspace_id.and_then(|id| scope.ws(id)).cloned();
             let ws_groups = scope.groups(data.task.workspace_id, true);
@@ -1775,6 +1855,10 @@ pub async fn task_detail(
                     dependents: data.dependents,
                     comment_views,
                     description_html,
+                    notes_html,
+                    children: data.children,
+                    updated_rel,
+                    editable: true,
                 })
             } else {
                 render_template(TaskDetailTemplate {
@@ -1787,6 +1871,10 @@ pub async fn task_detail(
                     dependents: data.dependents,
                     comment_views,
                     description_html,
+                    notes_html,
+                    children: data.children,
+                    updated_rel,
+                    editable: true,
                 })
             }
         }
@@ -1972,13 +2060,13 @@ pub async fn board(
             .chain(done_raw.iter())
             .map(|t| t.id.clone())
             .collect();
-        let blocker_counts = fetch_blocker_counts(&db, &all_board_ids)?;
+        let blocker_map = fetch_open_blockers(&db, &all_board_ids)?;
         let pending = db.pending_user_comment_count_by_task(&scope_filter)?;
         let to_rows = |tasks: Vec<Task>| -> Vec<TaskRow> {
             tasks
                 .into_iter()
                 .map(|t| {
-                    TaskRow::from_task(t, &parents, &empty_child_counts, &blocker_counts)
+                    TaskRow::from_task(t, &parents, &empty_child_counts, &blocker_map)
                         .with_workspace(&scope)
                         .with_pending(&pending)
                 })
@@ -2240,6 +2328,13 @@ pub async fn epic_detail(
             // Pre-render description from markdown to HTML.
             // The |safe filter in the template prevents double-escaping.
             let description_html = task.description.as_deref().map(render_markdown);
+            let notes_html = task
+                .notes
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .map(render_markdown);
+            let ws = task.workspace_id.and_then(|wid| scope.ws(wid)).cloned();
+            let updated_rel = relative_time(task.updated_at, chrono::Utc::now());
             let done_since_str = done_since_label(&done_since_param);
             let poll_query = build_epic_detail_poll_query(&view_clone, &done_since_str);
             Ok(Some(EpicDetailTemplate {
@@ -2258,6 +2353,12 @@ pub async fn epic_detail(
                 done_since: done_since_str,
                 poll_query,
                 description_html,
+                notes_html,
+                ws,
+                ws_groups: Vec::new(),
+                parent: None,
+                updated_rel,
+                editable: false,
             }))
         })
         .await
@@ -2581,5 +2682,16 @@ mod tests {
         let some: CreateTaskBody =
             serde_json::from_str(r#"{"title":"x","workspace_id":2}"#).unwrap();
         assert_eq!(some.workspace_id, Some(2));
+    }
+
+    #[test]
+    fn test_relative_time_buckets() {
+        use super::relative_time;
+        let now = chrono::Utc::now();
+        let ago = |secs: i64| relative_time(now - chrono::Duration::seconds(secs), now);
+        assert_eq!(ago(5), "just now");
+        assert_eq!(ago(5 * 60), "5m ago");
+        assert_eq!(ago(2 * 3600), "2h ago");
+        assert_eq!(ago(3 * 86_400), "3d ago");
     }
 }
