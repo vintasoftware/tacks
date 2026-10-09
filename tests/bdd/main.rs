@@ -73,5 +73,8 @@ impl Default for TacksWorld {
 
 #[tokio::main]
 async fn main() {
-    TacksWorld::run("tests/features").await;
+    TacksWorld::cucumber()
+        .fail_on_skipped()
+        .run_and_exit("tests/features")
+        .await;
 }

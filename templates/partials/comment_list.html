@@ -1,0 +1,16 @@
+<div class="comment-list" id="comment-list-{{ task.id }}">
+  {% if comment_views.is_empty() %}
+  <p class="comment-empty">No comments yet.</p>
+  {% else %}
+  {% for cv in comment_views %}
+  <div class="comment {% if cv.is_user %}comment-user{% else %}comment-agent{% endif %}{% if cv.pending %} comment-pending{% endif %}">
+    <header class="comment-head">
+      {% if let Some(a) = cv.comment.author.as_deref() %}<span class="badge author-badge {% if cv.is_user %}author-user{% else %}author-agent{% endif %}">{{ a }}</span>{% endif %}
+      <time datetime="{{ cv.comment.created_at.to_rfc3339() }}" title="{{ cv.comment.created_at.format("%Y-%m-%d %H:%M:%S UTC") }}">{{ cv.comment.created_at.format("%b %d, %Y %H:%M") }}</time>
+      {% if cv.pending %}<span class="badge comment-awaiting" title="An agent must reply before this task can be closed">awaiting agent reply</span>{% endif %}
+    </header>
+    <div class="markdown-body">{{ cv.html|safe }}</div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>

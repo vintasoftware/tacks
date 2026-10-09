@@ -146,7 +146,8 @@ enum Commands {
         /// Close reason (done, duplicate, absorbed, stale, superseded)
         #[arg(short, long, default_value = "done")]
         reason: String,
-        /// Force close even if open dependents exist
+        /// Force close even if open subtasks exist or user comments are unanswered
+        /// (use only if the user agreed)
         #[arg(long)]
         force: bool,
     },
@@ -168,6 +169,9 @@ enum Commands {
         id: String,
         /// Comment text
         body: String,
+        /// Comment author (default: agent). "user" marks it as user feedback
+        #[arg(long)]
+        author: Option<String>,
     },
     /// Show blocked tasks (tasks with open blockers)
     Blocked,
@@ -336,8 +340,8 @@ fn main() {
                 commands::dep::remove(&db_path, &child, &parent, &scope)
             }
         },
-        Commands::Comment { id, body } => {
-            commands::comment::run(&db_path, &id, &body, &scope, cli.json)
+        Commands::Comment { id, body, author } => {
+            commands::comment::run(&db_path, &id, &body, author.as_deref(), &scope, cli.json)
         }
         Commands::Blocked => commands::blocked::run(&db_path, &scope, cli.json),
         Commands::Workspaces => commands::workspaces::run(&db_path, &scope, cli.json),

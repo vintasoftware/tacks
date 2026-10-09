@@ -130,6 +130,8 @@ The sidebar shows **All**, then each project with its workspaces. The scope is i
 
 A workspace whose directory was deleted shows a "missing" marker. Its tasks stay in the project, and you can move them to another workspace from the task detail.
 
+Comments you add in the task detail are user feedback that agents must answer before closing the task (see `docs/user-feedback.md`). The server sanitizes rendered markdown and rejects cross-origin writes and non-loopback `Host` headers (see `docs/web-security.md`).
+
 ### Board view
 
 Kanban board with drag-and-drop status changes, column counts, and multi-select filters.
@@ -186,6 +188,7 @@ claude --plugin-dir ./claude-plugin
 - **SessionStart hook** that auto-loads backlog context via `tk prime` for the current workspace (silent in workspaces that have no tasks; install the rules file too, see [Set up your agents](#set-up-your-agents-claude-code))
 - **PreCompact hook** that re-runs `tk prime` before context compaction to preserve backlog state
 - **PreToolUse hook** that asks you to confirm any Bash `tk` command reaching outside the current workspace (`--scope project|all`, `--workspace`, `--move-to`, `--db`, `TACKS_WORKSPACE`/`TACKS_DB`); see [workspace scoping](docs/workspace-scoping.md#agent-hook)
+- **PostToolUse hook** that delivers unanswered user comments (written in the web UI) into the running session; see [user feedback](docs/user-feedback.md)
 - **Task agent** (`@task-agent`) for autonomous work discovery: finds ready tasks, claims them, executes, files discoveries, and closes on completion
 
 ## Designed for agents

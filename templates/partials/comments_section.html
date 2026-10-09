@@ -1,0 +1,13 @@
+<section class="comments-section" data-task-id="{{ task.id }}">
+  <h4 class="comments-heading">Comments</h4>
+  {% include "partials/comment_list.html" %}
+  <form class="comment-form" data-task-id="{{ task.id }}" autocomplete="off">
+    <label for="comment-body-{{ task.id }}" class="sr-only">Add a comment (markdown)</label>
+    <textarea id="comment-body-{{ task.id }}" name="body" rows="3" placeholder="Add a comment (markdown supported, Ctrl/Cmd+Enter to send)"></textarea>
+    <div class="comment-form-actions">
+      <button type="submit" disabled>Add comment</button>
+      <small class="comment-hint">Agents working in this workspace see this comment and must reply before closing the task.</small>
+    </div>
+    <p class="comment-error" role="alert" hidden></p>
+  </form>
+</section>

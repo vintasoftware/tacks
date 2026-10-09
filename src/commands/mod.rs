@@ -20,6 +20,15 @@ use crate::models::Task;
 use colored::Colorize;
 
 /// Format a priority number as a colored string.
+/// Truncate `s` to at most `max` characters, appending `...` when cut.
+pub fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{cut}...")
+}
+
 pub fn format_priority(p: u8) -> String {
     match p {
         0 => "P0".red().bold().to_string(),

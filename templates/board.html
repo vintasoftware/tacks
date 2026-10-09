@@ -77,6 +77,9 @@
            hx-swap="innerHTML">{{ row.task.title }}</a>
         {% call m::priority_badge(row.task.priority) %}
       </div>
+      {% if row.pending_count > 0 %}
+      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
+      {% endif %}
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
       {% endif %}
@@ -100,6 +103,9 @@
            hx-swap="innerHTML">{{ row.task.title }}</a>
         {% call m::priority_badge(row.task.priority) %}
       </div>
+      {% if row.pending_count > 0 %}
+      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
+      {% endif %}
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
       {% endif %}
@@ -123,6 +129,9 @@
            hx-swap="innerHTML">{{ row.task.title }}</a>
         {% call m::priority_badge(row.task.priority) %}
       </div>
+      {% if row.pending_count > 0 %}
+      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
+      {% endif %}
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
       {% endif %}
@@ -150,6 +159,9 @@
            hx-swap="innerHTML">{{ row.task.title }}</a>
         {% call m::priority_badge(row.task.priority) %}
       </div>
+      {% if row.pending_count > 0 %}
+      <div class="board-card-pending">{% call m::pending_badge(row.pending_count) %}</div>
+      {% endif %}
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
       {% endif %}

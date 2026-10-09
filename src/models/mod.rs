@@ -101,6 +101,19 @@ pub struct Comment {
     pub task_id: String,
     pub body: String,
     pub created_at: DateTime<Utc>,
+    /// Who wrote the comment: `"user"` (web UI), `"agent"` (CLI), or `None` for legacy
+    /// comments (treated as agent-authored).
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+/// A user comment the agent has not replied to yet, with its task context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingComment {
+    pub task_id: String,
+    pub task_title: String,
+    pub task_status: String,
+    pub comment: Comment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

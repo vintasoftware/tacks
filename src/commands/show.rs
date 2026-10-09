@@ -71,7 +71,17 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
         let children = db.get_children(id)?;
         let dependents = db.get_dependents(id)?;
         let workspace = workspace_json(&db, task.workspace_id)?;
+        // Additive: ids of user comments still awaiting an agent reply.
+        let pending_ids: Vec<i64> = db
+            .task_pending_user_comments(id)?
+            .iter()
+            .map(|c| c.id)
+            .collect();
         if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "pending_user_comments".to_string(),
+                serde_json::to_value(&pending_ids).unwrap_or_default(),
+            );
             obj.insert("workspace".to_string(), workspace);
             obj.insert(
                 "comments".to_string(),
@@ -179,9 +189,29 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
     // Show comments
     let comments = db.get_comments(id)?;
     if !comments.is_empty() {
+        let pending: Vec<i64> = db
+            .task_pending_user_comments(id)?
+            .iter()
+            .map(|c| c.id)
+            .collect();
         println!("\nComments:");
         for c in &comments {
-            println!("  [{}] {}", c.created_at.format("%Y-%m-%d %H:%M"), c.body);
+            let author = match c.author.as_deref() {
+                Some(a) => format!(" [{a}]"),
+                None => String::new(),
+            };
+            let flag = if pending.contains(&c.id) {
+                "  ⚠ awaiting reply"
+            } else {
+                ""
+            };
+            println!(
+                "  [{}]{} {}{}",
+                c.created_at.format("%Y-%m-%d %H:%M"),
+                author,
+                c.body,
+                flag
+            );
         }
     }
 

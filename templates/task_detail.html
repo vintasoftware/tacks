@@ -66,17 +66,7 @@
 </section>
 {% endif %}
 
-{% if !comments.is_empty() %}
-<section>
-  <h2>Comments</h2>
-  {% for (i, comment) in comments.iter().enumerate() %}
-  <article>
-    <small>{{ comment.created_at.format("%b %d, %Y %H:%M") }}</small>
-    <div class="markdown-body">{{ comment_bodies_html[i]|safe }}</div>
-  </article>
-  {% endfor %}
-</section>
-{% endif %}
+{% include "partials/comments_section.html" %}
 
 <p><a href="{{ layout.prefix }}/tasks">Back to task list</a></p>
 {% endblock %}

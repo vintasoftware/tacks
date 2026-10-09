@@ -4,17 +4,28 @@
 //! any Bash command that runs `tk` in a way that reaches outside the current
 //! workspace. It never touches the database or git, and never fails: any
 //! problem results in no output and exit 0 (meaning "no opinion").
+//!
+//! `post-tool-use` pushes unanswered user comments (see `docs/user-feedback.md`) of the
+//! current workspace into the session as `additionalContext`, once per comment. It does
+//! nothing when the database does not exist and never fails.
 
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 use serde_json::{Value, json};
+
+use super::truncate_chars;
+use crate::db::{Database, ScopeFilter};
+use crate::scope;
 
 /// Hook events supported by `tk hook`.
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum HookEvent {
     /// Claude Code PreToolUse event
     PreToolUse,
+    /// Claude Code PostToolUse event: delivers unanswered user feedback
+    PostToolUse,
 }
 
 /// Run the hook for `event`, reading its JSON payload from stdin.
@@ -25,10 +36,90 @@ pub fn run(event: HookEvent) {
     }
     let out = match event {
         HookEvent::PreToolUse => pre_tool_use(&input),
+        HookEvent::PostToolUse => post_tool_use(&input),
     };
     if let Some(out) = out {
         println!("{out}");
     }
+}
+
+/// Maximum size of the additionalContext string emitted by the PostToolUse hook.
+const MAX_CONTEXT_CHARS: usize = 8000;
+/// Maximum characters of one comment body in the hook message.
+const MAX_BODY_CHARS: usize = 500;
+
+/// Database path as the CLI would resolve it (`TACKS_DB`, else `~/.tacks/tacks.db`).
+fn hook_db_path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("TACKS_DB").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join(".tacks").join("tacks.db"))
+}
+
+/// Compute the PostToolUse hook output (pending user feedback), if any.
+///
+/// Silent (None) when the database is missing, the workspace is unregistered, or anything
+/// fails. Never creates the database.
+pub fn post_tool_use(input: &str) -> Option<String> {
+    let db_path = hook_db_path()?;
+    let explicit = std::env::var_os("TACKS_WORKSPACE")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
+    post_tool_use_in(input, &db_path, explicit.as_deref())
+}
+
+/// [`post_tool_use`] with the database path and explicit workspace given.
+pub fn post_tool_use_in(input: &str, db_path: &Path, explicit: Option<&Path>) -> Option<String> {
+    if !db_path.exists() {
+        return None;
+    }
+    let v: Value = serde_json::from_str(input).ok()?;
+    let cwd = v.get("cwd").and_then(Value::as_str).map(PathBuf::from);
+    let resolved = match (explicit, cwd) {
+        (Some(e), c) => scope::resolve(Some(e), c.as_deref().unwrap_or(Path::new("."))).ok()??,
+        (None, Some(c)) => scope::resolve(None, &c).ok()??,
+        (None, None) => return None,
+    };
+    let db = Database::open(db_path).ok()?;
+    let ws = db.find_workspace_by_path(&resolved.workspace_path).ok()??;
+    let pending = db
+        .undelivered_pending_user_comments(&ScopeFilter::Workspace(ws.id))
+        .ok()?;
+    if pending.is_empty() {
+        return None;
+    }
+
+    let mut text = String::from(
+        "tacks: the user left feedback on tasks in this workspace. Treat each comment as an instruction for that task: address it, then reply with `tk comment <id> \"...\"` (tk close refuses while it is unanswered).\n",
+    );
+    let mut shown: Vec<i64> = Vec::new();
+    for p in &pending {
+        let body = truncate_chars(&p.comment.body.replace('\n', " "), MAX_BODY_CHARS);
+        let line = format!("- {} ({}): \"{}\"\n", p.task_id, p.task_title, body);
+        // reserve room for the trailing "more" note
+        if text.chars().count() + line.chars().count() + 80 > MAX_CONTEXT_CHARS {
+            break;
+        }
+        text.push_str(&line);
+        shown.push(p.comment.id);
+    }
+    let more = pending.len() - shown.len();
+    if more > 0 {
+        text.push_str(&format!(
+            "(+{more} more comment(s); they will be shown after your next tool call, or see `tk prime`)\n"
+        ));
+    }
+    // Only what was shown is marked delivered; the rest follows on the next tool call.
+    db.mark_comments_delivered(&shown).ok()?;
+
+    Some(
+        json!({"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": text.trim_end(),
+        }})
+        .to_string(),
+    )
 }
 
 /// Compute the PreToolUse hook output for a stdin payload, if any.
@@ -352,5 +443,85 @@ mod tests {
         assert!(
             pre_tool_use(r#"{"tool_name":"Bash","tool_input":{"command":"tk list"}}"#).is_none()
         );
+    }
+
+    fn tk(db: &Path, ws: &Path) -> assert_cmd::Command {
+        let mut c = assert_cmd::Command::cargo_bin("tk").unwrap();
+        c.env("TACKS_DB", db).env("TACKS_WORKSPACE", ws);
+        c
+    }
+
+    #[test]
+    fn post_tool_use_delivers_once_and_is_silent_otherwise() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("t.db");
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        let input =
+            json!({"cwd": ws.to_string_lossy(), "hook_event_name": "PostToolUse"}).to_string();
+
+        // missing database: silent, and the database is not created
+        assert!(post_tool_use_in(&input, &db, Some(&ws)).is_none());
+        assert!(!db.exists());
+
+        tk(&db, &ws).arg("init").assert().success();
+        let out = tk(&db, &ws)
+            .args(["--json", "create", "do it"])
+            .output()
+            .unwrap();
+        let id = serde_json::from_slice::<Value>(&out.stdout).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        tk(&db, &ws)
+            .args(["comment", &id, "please fix", "--author", "user"])
+            .assert()
+            .success();
+
+        let out = post_tool_use_in(&input, &db, Some(&ws)).expect("feedback expected");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        let ctx = v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(ctx.contains(&id) && ctx.contains("please fix") && ctx.contains("tk comment"));
+        // delivered: second call is silent
+        assert!(post_tool_use_in(&input, &db, Some(&ws)).is_none());
+        // garbage input is silent
+        assert!(post_tool_use_in("garbage", &db, Some(&ws)).is_none());
+    }
+
+    #[test]
+    fn post_tool_use_truncates_long_batches() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("t.db");
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        let input = json!({"cwd": ws.to_string_lossy()}).to_string();
+        tk(&db, &ws).arg("init").assert().success();
+        let out = tk(&db, &ws)
+            .args(["--json", "create", "t"])
+            .output()
+            .unwrap();
+        let id = serde_json::from_slice::<Value>(&out.stdout).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let big = "x".repeat(600);
+        for _ in 0..30 {
+            tk(&db, &ws)
+                .args(["comment", &id, &big, "--author", "user"])
+                .assert()
+                .success();
+        }
+        let out = post_tool_use_in(&input, &db, Some(&ws)).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let ctx = v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(ctx.chars().count() <= MAX_CONTEXT_CHARS);
+        assert!(ctx.contains("more comment(s)"));
+        // the remainder is delivered on the next call
+        assert!(post_tool_use_in(&input, &db, Some(&ws)).is_some());
     }
 }

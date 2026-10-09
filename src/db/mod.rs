@@ -1,12 +1,15 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
+use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 
-use crate::models::{Comment, Dependency, Project, Status, Task, Workspace, validate_close_reason};
+use crate::models::{
+    Comment, Dependency, PendingComment, Project, Status, Task, Workspace, validate_close_reason,
+};
 
 /// Latest schema version known to this build.
-const LATEST_SCHEMA_VERSION: i32 = 3;
+const LATEST_SCHEMA_VERSION: i32 = 4;
 
 /// Which tasks a list-type query should cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -769,7 +772,18 @@ impl Database {
 
     // -- Comments --
 
+    /// Add a comment with no recorded author (legacy behaviour; treated as agent-authored).
     pub fn add_comment(&self, task_id: &str, body: &str) -> Result<Comment, String> {
+        self.add_comment_by(task_id, body, None)
+    }
+
+    /// Add a comment attributed to `author` (`"user"` for the web UI, `"agent"` for the CLI).
+    pub fn add_comment_by(
+        &self,
+        task_id: &str,
+        body: &str,
+        author: Option<&str>,
+    ) -> Result<Comment, String> {
         // Verify task exists
         self.get_task(task_id)?
             .ok_or_else(|| format!("task not found: {task_id}"))?;
@@ -777,8 +791,8 @@ impl Database {
         let now = Utc::now();
         self.conn
             .execute(
-                "INSERT INTO comments (task_id, body, created_at) VALUES (?1, ?2, ?3)",
-                params![task_id, body, now.to_rfc3339()],
+                "INSERT INTO comments (task_id, body, created_at, author) VALUES (?1, ?2, ?3, ?4)",
+                params![task_id, body, now.to_rfc3339(), author],
             )
             .map_err(|e| format!("failed to add comment: {e}"))?;
 
@@ -788,30 +802,21 @@ impl Database {
             task_id: task_id.to_string(),
             body: body.to_string(),
             created_at: now,
+            author: author.map(str::to_string),
         })
     }
 
+    /// All comments on a task, oldest first.
     pub fn get_comments(&self, task_id: &str) -> Result<Vec<Comment>, String> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, task_id, body, created_at FROM comments WHERE task_id = ?1 ORDER BY created_at ASC",
+                "SELECT id, task_id, body, created_at, author FROM comments WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
             )
             .map_err(|e| format!("query error: {e}"))?;
 
         let rows = stmt
-            .query_map(params![task_id], |row| {
-                let created_str: String = row.get(3)?;
-                let created_at = DateTime::parse_from_rfc3339(&created_str)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
-                Ok(Comment {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    body: row.get(2)?,
-                    created_at,
-                })
-            })
+            .query_map(params![task_id], |row| Ok(row_to_comment(row, 0)))
             .map_err(|e| format!("query error: {e}"))?;
 
         let mut comments = Vec::new();
@@ -819,6 +824,108 @@ impl Database {
             comments.push(row.map_err(|e| format!("row error: {e}"))?);
         }
         Ok(comments)
+    }
+
+    /// Shared query for pending user comments. A comment is pending when it is authored by
+    /// `user`, its task is not done, and no non-user comment (NULL author counts as
+    /// non-user) on the same task has a higher id (ids are monotonic, so this is
+    /// "created after" without timestamp ties).
+    fn pending_query(
+        &self,
+        scope: &ScopeFilter,
+        extra: &str,
+    ) -> Result<Vec<PendingComment>, String> {
+        let mut sql = format!(
+            "SELECT c.id, c.task_id, c.body, c.created_at, c.author, t.title, t.status
+             FROM comments c JOIN tasks t ON t.id = c.task_id
+             WHERE c.author = 'user' AND t.status != 'done'
+               AND NOT EXISTS (SELECT 1 FROM comments r WHERE r.task_id = c.task_id
+                               AND r.id > c.id AND (r.author IS NULL OR r.author != 'user')){extra}"
+        );
+        let mut bound: Vec<i64> = Vec::new();
+        if let Some((cond, value)) = scope.condition("t.workspace_id", 1) {
+            sql.push_str(&format!(" AND {cond}"));
+            bound.extend(value);
+        }
+        sql.push_str(" ORDER BY c.created_at ASC, c.id ASC");
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("query error: {e}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(bound.iter()), |row| {
+                Ok(PendingComment {
+                    task_id: row.get(1)?,
+                    task_title: row.get(5)?,
+                    task_status: row.get(6)?,
+                    comment: row_to_comment(row, 0),
+                })
+            })
+            .map_err(|e| format!("query error: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("row error: {e}"))?);
+        }
+        Ok(out)
+    }
+
+    /// User comments the agent has not replied to yet, within `scope`, oldest first.
+    pub fn pending_user_comments(
+        &self,
+        scope: &ScopeFilter,
+    ) -> Result<Vec<PendingComment>, String> {
+        self.pending_query(scope, "")
+    }
+
+    /// Number of pending user comments per task id (tasks with none are absent).
+    pub fn pending_user_comment_count_by_task(
+        &self,
+        scope: &ScopeFilter,
+    ) -> Result<HashMap<String, i64>, String> {
+        let mut counts = HashMap::new();
+        for p in self.pending_user_comments(scope)? {
+            *counts.entry(p.task_id).or_insert(0) += 1;
+        }
+        Ok(counts)
+    }
+
+    /// Pending user comments for one task (empty when the task is done or missing).
+    pub fn task_pending_user_comments(&self, task_id: &str) -> Result<Vec<Comment>, String> {
+        Ok(self
+            .pending_user_comments(&ScopeFilter::All)?
+            .into_iter()
+            .filter(|p| p.task_id == task_id)
+            .map(|p| p.comment)
+            .collect())
+    }
+
+    /// Pending user comments that have not yet been pushed into an agent session.
+    pub fn undelivered_pending_user_comments(
+        &self,
+        scope: &ScopeFilter,
+    ) -> Result<Vec<PendingComment>, String> {
+        self.pending_query(scope, " AND c.delivered_at IS NULL")
+    }
+
+    /// Mark comments as delivered (sets `delivered_at` to now only where it is NULL), in one
+    /// transaction. Idempotent: already-delivered comments keep their original timestamp.
+    pub fn mark_comments_delivered(&self, ids: &[i64]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        self.with_savepoint(|| {
+            for id in ids {
+                self.conn
+                    .execute(
+                        "UPDATE comments SET delivered_at = ?1 WHERE id = ?2 AND delivered_at IS NULL",
+                        params![now, id],
+                    )
+                    .map_err(|e| format!("failed to mark comment delivered: {e}"))?;
+            }
+            Ok(())
+        })
     }
 
     // -- Stats --
@@ -1407,6 +1514,16 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
         )?;
     }
 
+    if version < 4 {
+        apply_migration(
+            conn,
+            4,
+            "ALTER TABLE comments ADD COLUMN author TEXT;
+             ALTER TABLE comments ADD COLUMN delivered_at TEXT;
+             CREATE INDEX IF NOT EXISTS idx_comments_author ON comments(task_id, author);",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1438,6 +1555,18 @@ fn scope_where(scope: &ScopeFilter) -> (String, Vec<i64>) {
     match scope.condition("workspace_id", 1) {
         Some((c, v)) => (format!(" WHERE {c}"), v.into_iter().collect()),
         None => (String::new(), Vec::new()),
+    }
+}
+
+/// Map a comment row whose columns (id, task_id, body, created_at, author) start at `base`.
+fn row_to_comment(row: &rusqlite::Row, base: usize) -> Comment {
+    let created_str: String = row.get(base + 3).unwrap_or_default();
+    Comment {
+        id: row.get(base).unwrap_or_default(),
+        task_id: row.get(base + 1).unwrap_or_default(),
+        body: row.get(base + 2).unwrap_or_default(),
+        created_at: parse_ts(&created_str),
+        author: row.get(base + 4).unwrap_or_default(),
     }
 }
 
@@ -2156,5 +2285,159 @@ mod tests {
 
         assert!(db.set_task_workspace("tk-nope", None).is_err());
         assert!(db.set_task_workspace(&parent.id, Some(9999)).is_err());
+    }
+
+    #[test]
+    fn test_migration_from_v3_adds_comment_columns() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("v3.db");
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE tasks (
+                     id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+                     status TEXT NOT NULL DEFAULT 'open', priority INTEGER NOT NULL DEFAULT 2,
+                     assignee TEXT, parent_id TEXT, tags TEXT NOT NULL DEFAULT '',
+                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                     close_reason TEXT, notes TEXT, workspace_id INTEGER);
+                 CREATE TABLE dependencies (child_id TEXT NOT NULL, parent_id TEXT NOT NULL,
+                     PRIMARY KEY (child_id, parent_id));
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
+                 INSERT INTO config VALUES ('schema_version', '3');
+                 INSERT INTO tasks (id, title, created_at, updated_at)
+                     VALUES ('tk-old1', 'old', '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO comments (task_id, body, created_at)
+                     VALUES ('tk-old1', 'legacy', '2024-01-01T00:00:00+00:00');",
+            )
+            .expect("seed v3");
+        }
+        let db = Database::open(&path).expect("open migrates");
+        assert_eq!(get_schema_version(&db.conn).unwrap(), LATEST_SCHEMA_VERSION);
+        let comments = db.get_comments("tk-old1").expect("comments");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].author, None);
+        assert!(db.task_pending_user_comments("tk-old1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_pending_user_comments_logic() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        let all = ScopeFilter::All;
+        assert!(db.pending_user_comments(&all).unwrap().is_empty());
+
+        let u1 = db.add_comment_by(&t.id, "u1", Some("user")).unwrap();
+        let u2 = db.add_comment_by(&t.id, "u2", Some("user")).unwrap();
+        let pending = db.pending_user_comments(&all).unwrap();
+        assert_eq!(
+            pending.iter().map(|p| p.comment.id).collect::<Vec<_>>(),
+            vec![u1.id, u2.id]
+        );
+        assert_eq!(pending[0].task_title, "t");
+        assert_eq!(pending[0].task_status, "open");
+        assert_eq!(
+            db.pending_user_comment_count_by_task(&all).unwrap()[&t.id],
+            2
+        );
+        assert_eq!(db.task_pending_user_comments(&t.id).unwrap().len(), 2);
+
+        // Agent reply clears all earlier user comments.
+        db.add_comment_by(&t.id, "reply", Some("agent")).unwrap();
+        assert!(db.pending_user_comments(&all).unwrap().is_empty());
+        assert!(
+            db.pending_user_comment_count_by_task(&all)
+                .unwrap()
+                .is_empty()
+        );
+
+        // New user comment after the reply is pending again.
+        let u3 = db.add_comment_by(&t.id, "u3", Some("user")).unwrap();
+        let p = db.task_pending_user_comments(&t.id).unwrap();
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].id, u3.id);
+        assert_eq!(p[0].author.as_deref(), Some("user"));
+
+        // NULL-author comment also counts as a reply.
+        db.add_comment(&t.id, "legacy reply").unwrap();
+        assert!(db.task_pending_user_comments(&t.id).unwrap().is_empty());
+
+        // Done tasks are excluded.
+        let d = make_task(&db, "d");
+        db.add_comment_by(&d.id, "late", Some("user")).unwrap();
+        assert_eq!(db.pending_user_comments(&all).unwrap().len(), 1);
+        db.close_task(&d.id, None).unwrap();
+        assert!(db.pending_user_comments(&all).unwrap().is_empty());
+        assert!(db.task_pending_user_comments(&d.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_pending_user_comments_scope_filtering() {
+        let (db, _d) = open_test_db();
+        let (p1, _p2, w1, _w2, w3) = setup_scopes(&db);
+        let a = task_in(&db, "a", Some(w1.id));
+        let b = task_in(&db, "b", Some(w3.id));
+        let u = task_in(&db, "u", None);
+        for t in [&a, &b, &u] {
+            db.add_comment_by(&t.id, "hi", Some("user")).unwrap();
+        }
+        let ids_for = |s: ScopeFilter| {
+            let mut v: Vec<String> = db
+                .pending_user_comments(&s)
+                .unwrap()
+                .into_iter()
+                .map(|p| p.task_id)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(ids_for(ScopeFilter::All).len(), 3);
+        assert_eq!(ids_for(ScopeFilter::Workspace(w1.id)), vec![a.id.clone()]);
+        assert_eq!(ids_for(ScopeFilter::Project(p1.id)), vec![a.id.clone()]);
+        assert_eq!(ids_for(ScopeFilter::Unscoped), vec![u.id.clone()]);
+        assert!(ids_for(ScopeFilter::Nothing).is_empty());
+        assert_eq!(
+            db.pending_user_comment_count_by_task(&ScopeFilter::Workspace(w3.id))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_mark_comments_delivered_is_idempotent() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        let c1 = db.add_comment_by(&t.id, "1", Some("user")).unwrap();
+        let c2 = db.add_comment_by(&t.id, "2", Some("user")).unwrap();
+        let all = ScopeFilter::All;
+        assert_eq!(db.undelivered_pending_user_comments(&all).unwrap().len(), 2);
+
+        db.mark_comments_delivered(&[c1.id]).unwrap();
+        let und = db.undelivered_pending_user_comments(&all).unwrap();
+        assert_eq!(und.len(), 1);
+        assert_eq!(und[0].comment.id, c2.id);
+        // Still pending overall.
+        assert_eq!(db.pending_user_comments(&all).unwrap().len(), 2);
+
+        let stamp = |id: i64| -> String {
+            db.conn
+                .query_row(
+                    "SELECT delivered_at FROM comments WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let first = stamp(c1.id);
+        db.mark_comments_delivered(&[c1.id, c2.id]).unwrap();
+        assert_eq!(stamp(c1.id), first);
+        assert!(
+            db.undelivered_pending_user_comments(&all)
+                .unwrap()
+                .is_empty()
+        );
+        db.mark_comments_delivered(&[]).unwrap();
     }
 }

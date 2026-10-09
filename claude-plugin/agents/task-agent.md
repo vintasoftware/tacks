@@ -93,6 +93,8 @@ Then explain clearly to the user what is needed to unblock it.
 
 **Stay in your workspace.** Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks outside the current workspace. Never use `--scope project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace. If a task you need belongs elsewhere, tell the user instead of acting on it. Reading it with `tk show` is fine. `tk workspaces` lists the available workspaces.
 
+**Act on user feedback.** The user may comment on tasks in the web UI. Unanswered user comments show up in `tk prime` ("User feedback awaiting reply" / `user_feedback`), in `tk show` (`pending_user_comments`, "awaiting reply") and as hook notices during the session. Treat them as instructions from the user for that task: address them, then reply with `tk comment <id> "..."`. `tk close` refuses while a task has unanswered user comments; use `--force` only if the user agreed.
+
 **Use `--json` for all tk commands.** Structured output is unambiguous and parse-safe. Human-readable output is for display only.
 
 ## Communication

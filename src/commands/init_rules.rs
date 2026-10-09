@@ -17,7 +17,7 @@ tk show <id>
 tk update <id> [fields...] [--claim] [--notes text] [--parent id|none]
 tk close <id> [-c comment] [-r reason] [--force]
 tk dep add|remove <child> <parent>
-tk comment <id> <body>
+tk comment <id> <body> [--author name]
 tk children <id>
 tk epic
 tk blocked
@@ -43,6 +43,12 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 3. Claim it: `tk update <id> --claim`
 4. Add working notes: `tk update <id> --notes "context"`
 5. Close when done: `tk close <id> -c "summary"`
+
+## User feedback
+
+- The user can comment on tasks in the web UI. Those comments appear in `tk prime` ("User feedback awaiting reply"), in `tk show` (marked "awaiting reply"), and as hook notices during the session.
+- Treat them as instructions from the user for that task: address them, then reply with `tk comment <id> "..."`.
+- `tk close` refuses while a task has unanswered user comments. Use `--force` only if the user agreed.
 
 ## Conventions
 

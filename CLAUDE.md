@@ -45,7 +45,7 @@ tests/
     blocked.feature           parent_filter.feature
     workspace_scoping.feature web_workspaces.feature
     workspace_guard.feature   agent_hook.feature
-    (plus web/API features: serve, web_api, web_views, ...)
+    (plus web/API features: serve, web_api, web_views, web_security, user_feedback, ...)
   bdd/
     main.rs         # cucumber-rs harness (World struct, runner)
     steps/          # Step definitions (shell out to tk binary via assert_cmd)
@@ -67,6 +67,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 - **No external dependencies**: SQLite is bundled (no system sqlite needed)
 - **Global DB**: default path is `~/.tacks/tacks.db`; `--db` / `TACKS_DB` override it
 - **Workspace scoping**: tasks are scoped per git worktree; ID-based writes (update, close, comment, dep, create --parent) are guarded by `--scope` (reads like show/children are not); see `docs/workspace-scoping.md` (`src/scope.rs` resolves scope)
+- **User feedback loop**: comments carry an author (`user` from the web UI, `agent` from the CLI); unanswered user comments show in `tk prime`/`tk show`/a PostToolUse hook and block `tk close` (unless `--force`); see `docs/user-feedback.md`
 - **BDD-driven**: Feature files are both executable tests and agent-readable behavioral documentation
 - **`--json` is global**: Declared on top-level Cli struct, accessed via `cli.json`
 
@@ -75,7 +76,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (339 scenarios, 2946 steps)
+cargo test --test bdd    # Run BDD scenarios (383 scenarios, 3382 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```

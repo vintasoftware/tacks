@@ -2003,4 +2003,93 @@
         showToast('Failed to move task', 'error');
       });
   });
+  // --- Comment form (task detail page / modal) ---
+  // POST /api/tasks/{id}/comments (author defaults to "user" server-side), then re-render the
+  // comments list from GET /tasks/{id}/comments without reloading the page.
+  function commentFormSync(form) {
+    var ta = form.querySelector('textarea');
+    var btn = form.querySelector('button[type="submit"]');
+    if (ta && btn && !form.hasAttribute('data-busy')) btn.disabled = ta.value.trim() === '';
+  }
+
+  function commentFormError(form, msg) {
+    var el = form.querySelector('.comment-error');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.hidden = !msg;
+  }
+
+  function submitCommentForm(form) {
+    var ta = form.querySelector('textarea');
+    var btn = form.querySelector('button[type="submit"]');
+    var taskId = form.getAttribute('data-task-id');
+    var body = ta.value;
+    if (body.trim() === '' || form.hasAttribute('data-busy')) return;
+    form.setAttribute('data-busy', '1');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    commentFormError(form, '');
+    fetch('/api/tasks/' + encodeURIComponent(taskId) + '/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: body }),
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+      })
+      .then(
+        function () {
+          // The comment is saved from here on; never report it as failed.
+          ta.value = '';
+          form.removeAttribute('data-busy');
+          btn.removeAttribute('aria-busy');
+          commentFormSync(form);
+          var listEl = document.getElementById('comment-list-' + taskId);
+          if (!listEl) return;
+          var reload = function () {
+            window.location.reload();
+          };
+          if (!window.htmx) {
+            reload();
+            return;
+          }
+          try {
+            // Pass the element itself: task ids contain dots, which break '#id' selectors.
+            var p = htmx.ajax('GET', '/tasks/' + encodeURIComponent(taskId) + '/comments', {
+              target: listEl,
+              swap: 'outerHTML',
+            });
+            if (p && typeof p.catch === 'function') p.catch(reload);
+          } catch (err) {
+            reload();
+          }
+        },
+        function () {
+          form.removeAttribute('data-busy');
+          btn.removeAttribute('aria-busy');
+          commentFormSync(form);
+          commentFormError(form, 'Could not add the comment. Your text is kept; try again.');
+        }
+      );
+  }
+
+  document.addEventListener('input', function (e) {
+    var form = e.target && e.target.closest && e.target.closest('.comment-form');
+    if (form) commentFormSync(form);
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var form = e.target && e.target.closest && e.target.closest('.comment-form');
+    if (form && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      submitCommentForm(form);
+    }
+  });
+
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || !form.classList || !form.classList.contains('comment-form')) return;
+    e.preventDefault();
+    submitCommentForm(form);
+  });
 })();

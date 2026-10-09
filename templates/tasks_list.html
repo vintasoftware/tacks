@@ -120,6 +120,7 @@
         {% if row.blocked_count > 0 %}
         <span class="badge dep-blocked" title="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}" aria-label="Blocked by {{ row.blocked_count }} {% if row.blocked_count == 1 %}task{% else %}tasks{% endif %}">⊘ Blocked</span>
         {% endif %}
+        {% if row.pending_count > 0 %}{% call m::pending_badge(row.pending_count) %}{% endif %}
         {% if row.children_total > 0 %}
         <span class="subtask-count" title="{{ row.children_done }} of {{ row.children_total }} subtasks done">{{ row.children_done }}/{{ row.children_total }}</span>
         {% endif %}

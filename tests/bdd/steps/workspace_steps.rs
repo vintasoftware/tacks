@@ -28,7 +28,7 @@ use crate::steps::web_steps::http_get;
 // ---------------------------------------------------------------------------
 
 /// Return the scenario's scratch directory, creating it (and `home/`) on demand.
-fn fs_root(world: &mut TacksWorld) -> PathBuf {
+pub fn fs_root(world: &mut TacksWorld) -> PathBuf {
     if world.fs_dir.is_none() {
         let dir = tempfile::TempDir::new().expect("create fs temp dir");
         std::fs::create_dir_all(dir.path().join("home")).expect("create fake home");
@@ -68,7 +68,7 @@ fn register_dir(world: &mut TacksWorld, alias: &str, path: &Path) {
     world.fs_paths.insert(alias.to_string(), canon);
 }
 
-fn dir_of(world: &TacksWorld, alias: &str) -> PathBuf {
+pub fn dir_of(world: &TacksWorld, alias: &str) -> PathBuf {
     world
         .fs_paths
         .get(alias)
@@ -110,7 +110,7 @@ fn split_args(line: &str) -> Vec<String> {
 }
 
 /// Build a `tk` command that is isolated from the real HOME and environment.
-fn tk_command(world: &mut TacksWorld, cwd: &Path) -> assert_cmd::Command {
+pub fn tk_command(world: &mut TacksWorld, cwd: &Path) -> assert_cmd::Command {
     let root = fs_root(world);
     let db_path = world
         .db_path
@@ -156,7 +156,7 @@ fn row_for(world: &mut TacksWorld, alias: &str) -> Value {
 }
 
 /// Replace `@path(..)`, `@workspace(..)`, `@project(..)` and `@id(..)` tokens.
-fn resolve(world: &mut TacksWorld, input: &str) -> String {
+pub fn resolve(world: &mut TacksWorld, input: &str) -> String {
     let mut out = String::new();
     let mut rest = input;
     while let Some(i) = rest.find('@') {
@@ -193,7 +193,7 @@ fn resolve(world: &mut TacksWorld, input: &str) -> String {
     out
 }
 
-fn record(world: &mut TacksWorld, output: &Output) {
+pub fn record(world: &mut TacksWorld, output: &Output) {
     world.last_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     world.last_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     world.last_exit_code = output.status.code().unwrap_or(-1);

@@ -63,17 +63,7 @@
   </section>
   {% endif %}
 
-  {% if !comments.is_empty() %}
-  <section>
-    <h4>Comments</h4>
-    {% for (i, comment) in comments.iter().enumerate() %}
-    <article>
-      <small>{{ comment.created_at.format("%b %d, %Y %H:%M") }}</small>
-      <div class="markdown-body">{{ comment_bodies_html[i]|safe }}</div>
-    </article>
-    {% endfor %}
-  </section>
-  {% endif %}
+  {% include "partials/comments_section.html" %}
 
   <footer>
     <a href="/tasks/{{ task.id }}" role="button" class="secondary outline">View full page</a>

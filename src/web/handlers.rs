@@ -92,6 +92,26 @@ pub struct AddDepBody {
 #[derive(Debug, Deserialize)]
 pub struct AddCommentBody {
     pub body: String,
+    /// Optional author label (max 64 chars after trimming); empty or absent means `"user"`.
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+/// Maximum length of a comment author label, in characters.
+const MAX_AUTHOR_CHARS: usize = 64;
+
+/// Resolve the author of a web comment: trimmed, empty/absent becomes `"user"`.
+fn resolve_author(author: Option<&str>) -> Result<String, AppError> {
+    let a = author.map(str::trim).unwrap_or_default();
+    if a.is_empty() {
+        return Ok("user".to_string());
+    }
+    if a.chars().count() > MAX_AUTHOR_CHARS {
+        return Err(AppError::Validation(format!(
+            "author must be at most {MAX_AUTHOR_CHARS} characters"
+        )));
+    }
+    Ok(a.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -548,7 +568,7 @@ pub async fn api_close_task(
 
         // Add comment if provided
         if let Some(ref comment) = comment_owned {
-            db.add_comment(&id, comment)?;
+            db.add_comment_by(&id, comment, Some("user"))?;
         }
 
         // Return the updated task
@@ -611,18 +631,19 @@ pub async fn api_remove_dep(
     }
 }
 
-/// POST /api/tasks/:id/comments — Add a comment (201).
+/// POST /api/tasks/:id/comments — Add a comment (201). The author defaults to `"user"`.
 pub async fn api_add_comment(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<AddCommentBody>,
 ) -> Result<impl IntoResponse, AppError> {
     let comment_body = body.body.clone();
+    let author = resolve_author(body.author.as_deref())?;
     let db = state.db.clone();
 
     let comment = tokio::task::spawn_blocking(move || {
         let db = db.lock().unwrap();
-        db.add_comment(&id, &comment_body)
+        db.add_comment_by(&id, &comment_body, Some(&author))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -894,6 +915,8 @@ struct TaskRow {
     blocked_count: usize,
     /// Workspace of the task, set only in project and All scopes (shown as a badge).
     workspace: Option<WsInfo>,
+    /// Number of user comments awaiting an agent reply.
+    pending_count: i64,
 }
 
 impl TaskRow {
@@ -920,7 +943,14 @@ impl TaskRow {
             children_total,
             blocked_count,
             workspace: None,
+            pending_count: 0,
         }
+    }
+
+    /// Attach the pending user-comment count from a per-task count map.
+    fn with_pending(mut self, pending: &std::collections::HashMap<String, i64>) -> Self {
+        self.pending_count = pending.get(&self.task.id).copied().unwrap_or(0);
+        self
     }
 
     /// Attach the workspace badge data when the scope shows badges.
@@ -1017,6 +1047,71 @@ struct TaskListTemplate {
     poll_query: String,
 }
 
+/// A comment prepared for display: sanitized HTML body and pending state.
+struct CommentView {
+    comment: Comment,
+    /// Sanitized markdown HTML (safe to output unescaped).
+    html: String,
+    /// True when this is a user comment still awaiting an agent reply.
+    pending: bool,
+    /// True when the comment was written by the user (author `"user"`).
+    is_user: bool,
+}
+
+/// Render comments and mark the ones listed in `pending_ids`.
+fn build_comment_views(comments: Vec<Comment>, pending_ids: &[i64]) -> Vec<CommentView> {
+    comments
+        .into_iter()
+        .map(|c| CommentView {
+            html: render_markdown(&c.body),
+            pending: pending_ids.contains(&c.id),
+            is_user: c.author.as_deref() == Some("user"),
+            comment: c,
+        })
+        .collect()
+}
+
+/// Template for the comments list (GET /tasks/:id/comments, re-rendered after posting).
+#[derive(Template)]
+#[template(path = "partials/comment_list.html")]
+struct CommentListTemplate {
+    task: Task,
+    comment_views: Vec<CommentView>,
+}
+
+/// GET /tasks/:id/comments — HTML fragment with the comments list (200 or 404).
+pub async fn task_comments(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let db = state.db.clone();
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<Option<CommentListTemplate>, String> {
+            let db = db.lock().unwrap();
+            let Some(task) = db.get_task(&id)? else {
+                return Ok(None);
+            };
+            let pending: Vec<i64> = db
+                .task_pending_user_comments(&id)?
+                .iter()
+                .map(|c| c.id)
+                .collect();
+            let comments = db.get_comments(&id)?;
+            Ok(Some(CommentListTemplate {
+                task,
+                comment_views: build_comment_views(comments, &pending),
+            }))
+        })
+        .await
+        .unwrap();
+    match result {
+        Ok(Some(t)) => render_template(t),
+        Ok(None) => (StatusCode::NOT_FOUND, "task not found").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("database error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 /// Template for the task detail page at GET /tasks/:id.
 #[derive(Template)]
 #[template(path = "task_detail.html")]
@@ -1032,11 +1127,10 @@ struct TaskDetailTemplate {
     parent: Option<Task>,
     blockers: Vec<Task>,
     dependents: Vec<Task>,
-    comments: Vec<Comment>,
-    /// Pre-rendered HTML for the task description (markdown → HTML, safe to output unescaped).
+    /// Comments with sanitized HTML bodies and pending markers.
+    comment_views: Vec<CommentView>,
+    /// Pre-rendered HTML for the task description (markdown → sanitized HTML).
     description_html: Option<String>,
-    /// Pre-rendered HTML for each comment body (markdown → HTML, safe to output unescaped).
-    comment_bodies_html: Vec<String>,
 }
 
 /// Template for the task detail modal fragment loaded via HTMX.
@@ -1053,11 +1147,10 @@ struct TaskDetailFragmentTemplate {
     parent: Option<Task>,
     blockers: Vec<Task>,
     dependents: Vec<Task>,
-    comments: Vec<Comment>,
-    /// Pre-rendered HTML for the task description (markdown → HTML, safe to output unescaped).
+    /// Comments with sanitized HTML bodies and pending markers.
+    comment_views: Vec<CommentView>,
+    /// Pre-rendered HTML for the task description (markdown → sanitized HTML).
     description_html: Option<String>,
-    /// Pre-rendered HTML for each comment body (markdown → HTML, safe to output unescaped).
-    comment_bodies_html: Vec<String>,
 }
 
 /// Template for the kanban board page at GET /board.
@@ -1299,11 +1392,13 @@ pub async fn task_list(
             let task_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
             let child_counts = fetch_child_counts(&db, &task_ids)?;
             let blocker_counts = fetch_blocker_counts(&db, &task_ids)?;
+            let pending = db.pending_user_comment_count_by_task(&scope_filter)?;
             let rows: Vec<TaskRow> = tasks
                 .into_iter()
                 .map(|t| {
                     TaskRow::from_task(t, &parents, &child_counts, &blocker_counts)
                         .with_workspace(&row_scope)
+                        .with_pending(&pending)
                 })
                 .collect();
             // Fetch all tags for the dropdown
@@ -1487,6 +1582,8 @@ struct TaskDetailData {
     blockers: Vec<Task>,
     dependents: Vec<Task>,
     comments: Vec<Comment>,
+    /// Ids of user comments awaiting an agent reply.
+    pending_ids: Vec<i64>,
 }
 
 /// GET /tasks/:id — Task detail page (200 or 404).
@@ -1523,12 +1620,18 @@ pub async fn task_detail(
         }
         let dependents = db.get_dependents(&id)?;
         let comments = db.get_comments(&id)?;
+        let pending_ids = db
+            .task_pending_user_comments(&id)?
+            .iter()
+            .map(|c| c.id)
+            .collect();
         Ok(Some(TaskDetailData {
             task,
             parent,
             blockers,
             dependents,
             comments,
+            pending_ids,
         }))
     })
     .await
@@ -1539,11 +1642,7 @@ pub async fn task_detail(
             // Pre-render description and comment bodies from markdown to HTML.
             // The |safe filter in the template prevents double-escaping.
             let description_html = data.task.description.as_deref().map(render_markdown);
-            let comment_bodies_html = data
-                .comments
-                .iter()
-                .map(|c| render_markdown(&c.body))
-                .collect::<Vec<_>>();
+            let comment_views = build_comment_views(data.comments, &data.pending_ids);
             let ws = data.task.workspace_id.and_then(|id| scope.ws(id)).cloned();
             let ws_groups = scope.groups(data.task.workspace_id, true);
             if is_htmx {
@@ -1554,9 +1653,8 @@ pub async fn task_detail(
                     parent: data.parent,
                     blockers: data.blockers,
                     dependents: data.dependents,
-                    comments: data.comments,
+                    comment_views,
                     description_html,
-                    comment_bodies_html,
                 })
             } else {
                 render_template(TaskDetailTemplate {
@@ -1567,9 +1665,8 @@ pub async fn task_detail(
                     parent: data.parent,
                     blockers: data.blockers,
                     dependents: data.dependents,
-                    comments: data.comments,
+                    comment_views,
                     description_html,
-                    comment_bodies_html,
                 })
             }
         }
@@ -1756,12 +1853,14 @@ pub async fn board(
             .map(|t| t.id.clone())
             .collect();
         let blocker_counts = fetch_blocker_counts(&db, &all_board_ids)?;
+        let pending = db.pending_user_comment_count_by_task(&scope_filter)?;
         let to_rows = |tasks: Vec<Task>| -> Vec<TaskRow> {
             tasks
                 .into_iter()
                 .map(|t| {
                     TaskRow::from_task(t, &parents, &empty_child_counts, &blocker_counts)
                         .with_workspace(&scope)
+                        .with_pending(&pending)
                 })
                 .collect()
         };

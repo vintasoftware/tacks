@@ -1,2 +1,4 @@
 {% macro ws_badge(ws) %}<span class="badge ws-badge{% if ws.missing %} ws-missing{% endif %}" title="{{ ws.project_name }}: {{ ws.path }}{% if ws.missing %} (path no longer exists){% endif %}">{{ ws.name }}{% if ws.missing %} · missing{% endif %}</span>{% endmacro %}
 {% macro priority_badge(p) %}<span class="badge priority-{{ p }}">{%- if p == 0 -%}▲▲ P0{%- else if p == 1 -%}▲ P1{%- else if p == 2 -%}▬ P2{%- else if p == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}</span>{% endmacro %}
+
+{% macro pending_badge(n) %}<span class="pending-comments" title="{{ n }} user comment{% if n != 1 %}s{% endif %} awaiting agent reply" aria-label="{{ n }} user comment{% if n != 1 %}s{% endif %} awaiting agent reply">💬 {{ n }}</span>{% endmacro %}

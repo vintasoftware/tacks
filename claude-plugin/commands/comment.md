@@ -33,5 +33,7 @@ tk comment tk-a1b2 "Blocked on upstream API change in service B — waiting for 
 
 - Comments are **append-only** — they cannot be edited or deleted. Use them for permanent activity log entries.
 - For mutable working context (notes you want to update as you go), use `tk update --notes "<text>"` instead.
+- Comments are recorded with author `agent` by default. `--author <name>` sets another author (free text); the author `user` marks a comment as user feedback, which the web UI uses. Do not set `--author user` yourself.
+- **Replying to user feedback**: when the user left a comment on a task (shown by `tk prime`, `tk show` or a hook notice), address it, then reply with `tk comment <id> "..."`. The reply clears the "awaiting reply" state and lets `tk close` proceed.
 - Comments appear in `tk show <id>` output under the comments section.
 - Use comments to record: decisions made, findings from investigation, handoff context, or status updates.

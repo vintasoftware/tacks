@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::db::Database;
-use crate::models::Task;
+use crate::models::{PendingComment, Task};
 use crate::scope::{Scope, ScopeMode};
 
 const READY_LIMIT: u32 = 5;
@@ -12,9 +12,9 @@ const COMMAND_REFERENCE: &[&str] = &[
     "tk ready [--limit N] [--json]",
     "tk show <id> [--json]",
     "tk update <id> [fields...] [--claim]",
-    "tk close <id> [-c comment]",
+    "tk close <id> [-c comment] (refused while user comments are unanswered)",
     "tk dep add|remove <child> <parent>",
-    "tk comment <id> <body>",
+    "tk comment <id> <body> (reply to user feedback with it)",
     "tk stats [--oneline] [--json]",
     "tk workspaces [--json]",
     "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen (reads only; do not use it for writes unless the user asked)",
@@ -64,20 +64,50 @@ pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
         &filter,
     )?;
     let ready = db.get_ready_tasks(Some(READY_LIMIT), &filter)?;
+    let feedback = db.pending_user_comments(&filter)?;
 
-    if json {
-        print_json(&by_status, &in_progress, &ready)
+    let result = if json {
+        print_json(&by_status, &in_progress, &ready, &feedback)
     } else {
-        print_markdown(&by_status, &in_progress, &ready)
+        print_markdown(&by_status, &in_progress, &ready, &feedback)
+    };
+
+    // The feedback is now in the agent's context: stop the hook from repeating it.
+    // A failure here must not fail prime (worst case the hook repeats it once).
+    if result.is_ok() {
+        let ids: Vec<i64> = feedback.iter().map(|p| p.comment.id).collect();
+        let _ = db.mark_comments_delivered(&ids);
     }
+    result
 }
 
 fn print_markdown(
     by_status: &[(String, i64)],
     in_progress: &[Task],
     ready: &[Task],
+    feedback: &[PendingComment],
 ) -> Result<(), String> {
     println!("# Tacks: Project Status");
+
+    if !feedback.is_empty() {
+        println!();
+        println!("## User feedback awaiting reply");
+        println!(
+            "The user commented on these tasks. Treat each comment as an instruction for that task: address it, then reply with `tk comment <id> \"...\"`."
+        );
+        for p in feedback {
+            println!(
+                "- {}: {} ({})",
+                p.task_id,
+                p.task_title,
+                p.comment.created_at.format("%Y-%m-%d %H:%M")
+            );
+            println!(
+                "    \"{}\"",
+                super::truncate_chars(&p.comment.body.replace('\n', " "), 300)
+            );
+        }
+    }
 
     // Stats section
     println!();
@@ -129,6 +159,7 @@ fn print_json(
     by_status: &[(String, i64)],
     in_progress: &[Task],
     ready: &[Task],
+    feedback: &[PendingComment],
 ) -> Result<(), String> {
     // Build a stats object with the four canonical statuses always present.
     let mut stats = serde_json::Map::new();
@@ -145,7 +176,22 @@ fn print_json(
         .map(|s| serde_json::Value::String(s.to_string()))
         .collect();
 
+    // Additive key: user comments awaiting an agent reply (empty array when none).
+    let user_feedback: Vec<serde_json::Value> = feedback
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "task_id": p.task_id,
+                "task_title": p.task_title,
+                "comment_id": p.comment.id,
+                "body": p.comment.body,
+                "created_at": p.comment.created_at,
+            })
+        })
+        .collect();
+
     let out = serde_json::json!({
+        "user_feedback": user_feedback,
         "stats": stats,
         "in_progress": in_progress,
         "ready": ready,

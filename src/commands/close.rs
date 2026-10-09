@@ -22,6 +22,29 @@ pub fn run(
         validate_close_reason(r)?;
     }
 
+    // Feedback guard: refuse while the user has comments the agent has not answered.
+    if !force {
+        let pending = db.task_pending_user_comments(id)?;
+        if !pending.is_empty() {
+            let items: Vec<String> = pending
+                .iter()
+                .map(|c| {
+                    format!(
+                        "\"{}\"",
+                        super::truncate_chars(&c.body.replace('\n', " "), 80)
+                    )
+                })
+                .collect();
+            return Err(format!(
+                "task {} has {} unanswered user comment(s): {}. address them and reply with `tk comment {} \"...\"` first, or use --force only if the user agreed to close",
+                id,
+                pending.len(),
+                items.join("; "),
+                id
+            ));
+        }
+    }
+
     // Close guard: refuse to close a parent task (epic) that still has open
     // subtask children. Use --force to override.
     //
@@ -50,7 +73,7 @@ pub fn run(
     db.close_task(id, reason)?;
 
     if let Some(body) = comment {
-        db.add_comment(id, body)?;
+        db.add_comment_by(id, body, Some("agent"))?;
     }
 
     if json {
