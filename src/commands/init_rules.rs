@@ -23,9 +23,12 @@ tk epic
 tk blocked
 tk stats [--oneline]
 tk prime
+tk workspaces
 ```
 
 All commands support `--json` for machine-readable output.
+
+Tasks are scoped automatically to the current git worktree (workspace) in one global database (`~/.tacks/tacks.db`). Widen list-type commands with `--scope project|all`, target another worktree with `--workspace <path>`, and move a task with `tk update <id> --move-to <path|none>`.
 
 ## Workflow
 
@@ -38,7 +41,7 @@ All commands support `--json` for machine-readable output.
 ## Conventions
 
 - Task IDs use `tk-XXXX` format, subtasks use `tk-XXXX.N`
-- Priority: P0 (critical) through P3 (low), default P2
+- Priority: P0 (critical) through P3 (low), P4 (trivial), default P2
 - Status: open → in_progress → done (or blocked)
 - Close reasons: done, duplicate, absorbed, stale, superseded
 - Tags are comma-separated: `-t "backend,api"`

@@ -132,7 +132,7 @@ claude --plugin-dir ./claude-plugin
 
 ### What the plugin provides
 
-- **Slash commands** for all `tk` operations: `/tacks:create`, `/tacks:list`, `/tacks:ready`, `/tacks:show`, `/tacks:update`, `/tacks:close`, `/tacks:dep`, `/tacks:comment`, `/tacks:children`, `/tacks:epic`, `/tacks:blocked`, `/tacks:stats`, `/tacks:prime`, `/tacks:init`
+- **Slash commands** for all `tk` operations: `/tacks:create`, `/tacks:list`, `/tacks:ready`, `/tacks:show`, `/tacks:update`, `/tacks:close`, `/tacks:dep`, `/tacks:comment`, `/tacks:children`, `/tacks:epic`, `/tacks:blocked`, `/tacks:stats`, `/tacks:prime`, `/tacks:init`, `/tacks:workspaces`
 - **SessionStart hook** that auto-loads backlog context via `tk prime` — every session starts with full situational awareness
 - **PreCompact hook** that re-runs `tk prime` before context compaction to preserve backlog state
 - **Task agent** (`@task-agent`) for autonomous work discovery: finds ready tasks, claims them, executes, files discoveries, and closes on completion

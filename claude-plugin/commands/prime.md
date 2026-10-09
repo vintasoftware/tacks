@@ -7,7 +7,7 @@ Run `tk prime` to get a compact, AI-optimized snapshot of the current backlog st
 ## Usage
 
 ```bash
-tk prime [--json]
+tk prime [--scope project|all] [--workspace <path>] [--json]
 ```
 
 ## Instructions
@@ -34,4 +34,5 @@ tk prime --json
 - `tk prime` is the recommended first command when starting a session — it gives you full situational awareness in one call.
 - The output combines: backlog stats, currently in-progress tasks, and the top ready (unblocked) tasks.
 - This command is automatically invoked by the plugin hooks at `SessionStart` and `PreCompact` so context is never lost during compaction.
+- `tk prime` prints nothing (exit 0) when the current workspace has never used tacks, so hooks stay silent in unrelated repositories.
 - For more detail on any specific task, follow up with `tk show <id>`.

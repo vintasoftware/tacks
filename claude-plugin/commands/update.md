@@ -9,7 +9,7 @@ Run `tk update <id>` to modify task properties. Use `--claim` to take ownership 
 ```bash
 tk update <id> [--title <title>] [--priority <n>] [--status <status>]
                [--tags <tags>] [--assignee <name>] [--claim] [--notes <text>]
-               [--parent <id>|none]
+               [--parent <id>|none] [--move-to <path>|none]
 ```
 
 ## Flags
@@ -17,7 +17,7 @@ tk update <id> [--title <title>] [--priority <n>] [--status <status>]
 | Flag | Description |
 |------|-------------|
 | `--title <title>` | New title for the task |
-| `--priority <n>` | New priority level (1 = highest) |
+| `--priority <n>` | New priority level (0 = critical, 1 = high, 2 = medium, 3 = low, 4 = trivial) |
 | `--status <status>` | New status: `open`, `in_progress`, `done`, `blocked` |
 | `--tags <tags>` | Replace tags with comma-separated list |
 | `--assignee <name>` | Assign to a person or agent |
@@ -25,6 +25,7 @@ tk update <id> [--title <title>] [--priority <n>] [--status <status>]
 | `--notes <text>` | Set mutable working notes (overwrites previous notes) |
 | `--parent <id>` | Move task under a parent/epic |
 | `--parent none` | Promote subtask to top-level task |
+| `--move-to <path>` | Move the task and its subtasks to another workspace (worktree path); `none` makes it unscoped |
 
 ## Instructions
 
@@ -50,6 +51,9 @@ tk update tk-a1b2 --status blocked
 # Reparent a task under an epic
 tk update tk-a1b2 --parent tk-c3d4
 
+# Move a task (and its subtasks) to another workspace
+tk update tk-a1b2 --move-to /path/to/other/worktree
+
 # Promote a subtask to top-level
 tk update tk-c3d4.1 --parent none
 ```
@@ -58,5 +62,6 @@ tk update tk-c3d4.1 --parent none
 
 - `--claim` is the standard way to start working on a task: it sets `status=in_progress` and records the assignee.
 - `--notes` **overwrites** previous notes — it is mutable working context, not a log. Use `tk comment` to append to the activity log instead.
+- `--move-to` registers the target workspace if it is new; see `/tacks:workspaces` for listing workspaces.
 - Multiple flags can be combined in a single `tk update` call.
 - Use `--json` to parse the updated task back.

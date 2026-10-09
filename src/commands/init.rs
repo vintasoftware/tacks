@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::db::Database;
 
 pub fn run(db_path: &Path, prefix: &str) -> Result<(), String> {
-    // Create the .tacks directory if it doesn't exist
+    // Create the database directory if it doesn't exist
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("failed to create directory: {e}"))?;
     }

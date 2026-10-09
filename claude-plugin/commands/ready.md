@@ -7,7 +7,7 @@ Run `tk ready` to list tasks that have no open dependencies blocking them. Use `
 ## Usage
 
 ```bash
-tk ready [--limit <n>] [--json]
+tk ready [--limit <n>] [--scope project|all] [--workspace <path>] [--json]
 ```
 
 ## Flags
@@ -15,6 +15,8 @@ tk ready [--limit <n>] [--json]
 | Flag | Description |
 |------|-------------|
 | `--limit <n>` | Return at most N tasks (e.g., `--limit 1` for the next task) |
+| `--scope project|all` | Global flag: include other workspaces of the project, or all workspaces |
+| `--workspace <path>` | Global flag: use another workspace instead of the current one |
 
 ## Instructions
 
