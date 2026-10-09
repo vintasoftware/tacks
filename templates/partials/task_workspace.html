@@ -8,6 +8,7 @@
   {% else %}
   <span class="ws-none">none</span>
   {% endif %}
+  <div class="ws-move">
   <select class="workspace-move-select" data-task-id="{{ task.id }}" aria-label="Move to workspace">
     <option value=""{% if ws.is_none() %} selected{% endif %}>none (unscoped)</option>
     {% for g in ws_groups.iter() %}
@@ -19,4 +20,5 @@
     {% endfor %}
   </select>
   <small class="ws-move-hint">Changing the workspace moves this task and all of its subtasks.</small>
+  </div>
 </div>

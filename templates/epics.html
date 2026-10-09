@@ -40,7 +40,7 @@
         <span class="filter-multiselect-placeholder">All priorities</span>
       </div>
       <ul class="filter-multiselect-dropdown" role="listbox" aria-multiselectable="true" hidden>
-        <li role="option" data-value="0" data-label="▲ P0" data-badge-class="priority-0"><span class="badge priority-0">▲ P0</span></li>
+        <li role="option" data-value="0" data-label="▲▲ P0" data-badge-class="priority-0"><span class="badge priority-0">▲▲ P0</span></li>
         <li role="option" data-value="1" data-label="▲ P1" data-badge-class="priority-1"><span class="badge priority-1">▲ P1</span></li>
         <li role="option" data-value="2" data-label="▬ P2" data-badge-class="priority-2"><span class="badge priority-2">▬ P2</span></li>
         <li role="option" data-value="3" data-label="▽ P3" data-badge-class="priority-3"><span class="badge priority-3">▽ P3</span></li>
@@ -78,13 +78,7 @@
         {%- else if ep.task.status == crate::models::Status::Done -%}✓ Done
         {%- else -%}⊘ Blocked{%- endif -%}
       </span></td>
-      <td><span class="badge priority-{{ ep.task.priority }}">
-        {%- if ep.task.priority == 0 -%}▲ P0
-        {%- else if ep.task.priority == 1 -%}▲ P1
-        {%- else if ep.task.priority == 2 -%}▬ P2
-        {%- else if ep.task.priority == 3 -%}▽ P3
-        {%- else -%}· P4{%- endif -%}
-      </span></td>
+      <td>{% call m::priority_badge(ep.task.priority) %}</td>
       <td><span class="progress-done">{{ ep.children_done }}</span>/<span class="progress-wip">{{ ep.children_in_progress }}</span>/<span class="progress-open">{{ ep.children_open }}</span> <span class="progress-total">({{ ep.children_total }})</span></td>
     </tr>
     {% endfor %}

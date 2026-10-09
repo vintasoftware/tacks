@@ -515,3 +515,17 @@ async fn the_response_json_nested_field_equals_int(
         "expected JSON path '{path}' to equal {expected} but got {actual}"
     );
 }
+
+/// Assert that the last response body contains the given text exactly `expected` times.
+#[then(expr = "the response body contains {string} exactly {int} times")]
+async fn the_response_body_contains_n_times(world: &mut TacksWorld, needle: String, expected: i64) {
+    let body = world
+        .last_response_body
+        .as_deref()
+        .expect("no HTTP response body recorded");
+    let actual = body.matches(needle.as_str()).count() as i64;
+    assert_eq!(
+        actual, expected,
+        "expected body to contain {needle:?} {expected} time(s) but found {actual}; body:\n{body}"
+    );
+}

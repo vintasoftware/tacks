@@ -170,6 +170,7 @@ pub async fn api_create_task(
         t
     };
 
+    check_priority(body.priority)?;
     let priority = body.priority.unwrap_or(2);
     let description = body.description.clone();
     let tags = body.tags.clone().unwrap_or_default();
@@ -186,7 +187,7 @@ pub async fn api_create_task(
             let parent = db
                 .get_task(pid)
                 .map_err(AppError::Internal)?
-                .ok_or_else(|| AppError::Internal(format!("parent task not found: {pid}")))?;
+                .ok_or_else(|| AppError::NotFound(format!("parent task not found: {pid}")))?;
             (
                 db.generate_child_id(pid).map_err(AppError::Internal)?,
                 parent.workspace_id,
@@ -262,6 +263,19 @@ fn filter_by_tags(tasks: Vec<Task>, tags: &[String]) -> Vec<Task> {
         .into_iter()
         .filter(|t| tags.iter().any(|tag| t.tags.contains(tag)))
         .collect()
+}
+
+/// Highest accepted priority value (0 = critical ... 4 = trivial).
+const MAX_PRIORITY: u8 = 4;
+
+/// Reject priorities outside 0..=4 with a 400.
+fn check_priority(p: Option<u8>) -> Result<(), AppError> {
+    match p {
+        Some(v) if v > MAX_PRIORITY => Err(AppError::BadRequest(format!(
+            "invalid priority: {v} (expected 0-{MAX_PRIORITY})"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Parse comma-separated priority values into a `Vec<u8>`.
@@ -417,12 +431,17 @@ pub async fn api_show_task(
     }
 }
 
-/// PATCH /api/tasks/:id — Update task fields (200 or 404).
+/// PATCH /api/tasks/:id — Update task fields (200, 400 for invalid input, or 404).
 pub async fn api_update_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateTaskBody>,
 ) -> Result<impl IntoResponse, AppError> {
+    check_priority(body.priority)?;
+    if let Some(ref s) = body.status {
+        s.parse::<crate::models::Status>()
+            .map_err(AppError::BadRequest)?;
+    }
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Task, String> {
         let db = db.lock().unwrap();
@@ -493,6 +512,9 @@ pub async fn api_update_task(
 
     match result {
         Ok(task) => Ok(Json(task)),
+        Err(e) if e.starts_with("cannot reparent") || e.starts_with("circular parenting") => {
+            Err(AppError::BadRequest(e))
+        }
         Err(e) if e.contains("not found") => Err(AppError::NotFound(e)),
         Err(e) => Err(AppError::Internal(e)),
     }

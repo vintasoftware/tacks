@@ -1298,7 +1298,7 @@
 
   // Build a priority badge HTML string for re-rendering after save
   function priorityBadgeHtml(priority) {
-    var icons = { 1: '▲', 2: '▬', 3: '▽', 4: '·' };
+    var icons = { 0: '▲▲', 1: '▲', 2: '▬', 3: '▽', 4: '·' };
     var icon = icons[priority] || '';
     return '<span class="badge priority-' + priority + '">' + icon + ' P' + priority + '</span>';
   }
@@ -1352,12 +1352,12 @@
         return { valid: false, message: 'title cannot be empty' };
       }
     } else if (field === 'priority') {
-      // Allow empty string (clears priority) or a number 1-4
+      // Allow empty string (clears priority) or a number 0-4
       var trimmed = rawValue.trim();
       if (trimmed !== '') {
         var num = Number(trimmed);
-        if (!Number.isInteger(num) || num < 1 || num > 4) {
-          return { valid: false, message: 'priority must be a number between 1 and 4' };
+        if (!Number.isInteger(num) || num < 0 || num > 4) {
+          return { valid: false, message: 'priority must be a number between 0 and 4' };
         }
       }
     } else if (field === 'status') {
@@ -1474,8 +1474,8 @@
     } else if (field === 'priority') {
       input = document.createElement('select');
       input.className = 'inline-edit-select';
-      var priorityLabels = { 1: '▲ P1', 2: '▬ P2', 3: '▽ P3', 4: '· P4' };
-      [1, 2, 3, 4].forEach(function (p) {
+      var priorityLabels = { 0: '▲▲ P0', 1: '▲ P1', 2: '▬ P2', 3: '▽ P3', 4: '· P4' };
+      [0, 1, 2, 3, 4].forEach(function (p) {
         var o = document.createElement('option');
         o.value = String(p);
         o.textContent = priorityLabels[p] || 'P' + p;

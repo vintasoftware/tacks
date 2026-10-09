@@ -32,6 +32,7 @@
         <span class="filter-multiselect-placeholder">All priorities</span>
       </div>
       <ul class="filter-multiselect-dropdown" role="listbox" aria-multiselectable="true" hidden>
+        <li role="option" data-value="0" data-label="▲▲ P0" data-badge-class="priority-0"><span class="badge priority-0">▲▲ P0</span></li>
         <li role="option" data-value="1" data-label="▲ P1" data-badge-class="priority-1"><span class="badge priority-1">▲ P1</span></li>
         <li role="option" data-value="2" data-label="▬ P2" data-badge-class="priority-2"><span class="badge priority-2">▬ P2</span></li>
         <li role="option" data-value="3" data-label="▽ P3" data-badge-class="priority-3"><span class="badge priority-3">▽ P3</span></li>
@@ -74,9 +75,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ row.task.title }}</a>
-        <span class="badge priority-{{ row.task.priority }}">
-          {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(row.task.priority) %}
       </div>
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
@@ -99,9 +98,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ row.task.title }}</a>
-        <span class="badge priority-{{ row.task.priority }}">
-          {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(row.task.priority) %}
       </div>
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
@@ -124,9 +121,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ row.task.title }}</a>
-        <span class="badge priority-{{ row.task.priority }}">
-          {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(row.task.priority) %}
       </div>
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>
@@ -153,9 +148,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ row.task.title }}</a>
-        <span class="badge priority-{{ row.task.priority }}">
-          {%- if row.task.priority == 1 -%}▲ P1{%- else if row.task.priority == 2 -%}▬ P2{%- else if row.task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(row.task.priority) %}
       </div>
       {% if row.workspace.is_some() %}
       <div class="board-card-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% endif %}</div>

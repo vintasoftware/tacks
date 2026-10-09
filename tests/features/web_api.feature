@@ -264,3 +264,47 @@ Feature: REST API endpoints
     When I GET the children endpoint for API task "childless"
     Then the response status is 200
     And the response JSON is an empty array
+
+  # ---------------------------------------------------------------------------
+  # Input validation — bad input must be a 4xx, never a 500
+  # ---------------------------------------------------------------------------
+
+  Scenario: PATCH /api/tasks/:id with an unknown status returns 400
+    Given I created a task via API with title "Status victim" as "status-victim"
+    When I PATCH the API task "status-victim" with body '{"status":"bogus"}'
+    Then the response status is 400
+    When I GET the API task "status-victim"
+    Then the response JSON field "status" equals "open"
+
+  Scenario: PATCH /api/tasks/:id with priority 5 returns 400
+    Given I created a task via API with title "Priority victim" as "prio-victim"
+    When I PATCH the API task "prio-victim" with body '{"priority":5}'
+    Then the response status is 400
+    When I GET the API task "prio-victim"
+    Then the response JSON field "priority" equals 2
+
+  Scenario: PATCH /api/tasks/:id with priority 4 is accepted
+    Given I created a task via API with title "Lowest priority" as "prio-low"
+    When I PATCH the API task "prio-low" with body '{"priority":4}'
+    Then the response status is 200
+    And the response JSON field "priority" equals 4
+
+  Scenario: POST /api/tasks with priority 5 returns 400
+    When I POST "/api/tasks" with body '{"title":"Too low","priority":5}'
+    Then the response status is 400
+
+  Scenario: POST /api/tasks with priority 4 is accepted
+    When I POST "/api/tasks" with body '{"title":"Lowest","priority":4}'
+    Then the response status is 201
+    And the response JSON field "priority" equals 4
+
+  Scenario: POST /api/tasks with an unknown parent_id returns 404
+    When I POST "/api/tasks" with body '{"title":"Orphan","parent_id":"tk-0000"}'
+    Then the response status is 404
+
+  Scenario: PATCH /api/tasks/:id cannot reparent a task under itself
+    Given I created a task via API with title "Self parent" as "self-parent"
+    When I PATCH resolved "/api/tasks/@id(self-parent)" with body '{"parent_id":"@id(self-parent)"}'
+    Then the response status is 400
+    When I GET the API task "self-parent"
+    Then the response JSON field "title" equals "Self parent"

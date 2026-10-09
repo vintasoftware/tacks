@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "macros.html" as m %}
 
 {% block title %}{{ task.title }} — Epic — Tacks{% endblock %}
 
@@ -40,9 +41,7 @@
     </span>
   </span>
   <span class="meta-sep">·</span>
-  <span class="meta-item"><span class="badge priority-{{ task.priority }}">
-    {%- if task.priority == 1 -%}▲ P1{%- else if task.priority == 2 -%}▬ P2{%- else if task.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-  </span></span>
+  <span class="meta-item">{% call m::priority_badge(task.priority) %}</span>
   <span class="meta-sep">·</span>
   <span class="meta-item"><span class="meta-label">Progress</span> <span class="progress-done">{{ children_done }}</span>/<span class="progress-wip">{{ children_in_progress }}</span>/<span class="progress-open">{{ children_open }}</span> <span class="progress-total">({{ children_total }})</span></span>
   {% if let Some(assignee) = task.assignee.as_deref() %}
@@ -125,9 +124,7 @@
           {%- else -%}⊘ Blocked{%- endif -%}
         </span>
       </td>
-      <td><span class="badge priority-{{ child.priority }}">
-        {%- if child.priority == 1 -%}▲ P1{%- else if child.priority == 2 -%}▬ P2{%- else if child.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-      </span></td>
+      <td>{% call m::priority_badge(child.priority) %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -151,9 +148,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ child.title }}</a>
-        <span class="badge priority-{{ child.priority }}">
-          {%- if child.priority == 1 -%}▲ P1{%- else if child.priority == 2 -%}▬ P2{%- else if child.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(child.priority) %}
       </div>
     </article>
     {%- endif -%}
@@ -170,9 +165,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ child.title }}</a>
-        <span class="badge priority-{{ child.priority }}">
-          {%- if child.priority == 1 -%}▲ P1{%- else if child.priority == 2 -%}▬ P2{%- else if child.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(child.priority) %}
       </div>
     </article>
     {%- endif -%}
@@ -189,9 +182,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ child.title }}</a>
-        <span class="badge priority-{{ child.priority }}">
-          {%- if child.priority == 1 -%}▲ P1{%- else if child.priority == 2 -%}▬ P2{%- else if child.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(child.priority) %}
       </div>
     </article>
     {%- endif -%}
@@ -212,9 +203,7 @@
            hx-target="#task-modal"
            hx-select="unset"
            hx-swap="innerHTML">{{ child.title }}</a>
-        <span class="badge priority-{{ child.priority }}">
-          {%- if child.priority == 1 -%}▲ P1{%- else if child.priority == 2 -%}▬ P2{%- else if child.priority == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}
-        </span>
+        {% call m::priority_badge(child.priority) %}
       </div>
     </article>
     {%- endif -%}

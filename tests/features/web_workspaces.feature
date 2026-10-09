@@ -246,7 +246,7 @@ Feature: Workspace scoping in the web UI and API
 
   Scenario: PATCH with a failing field leaves the workspace unchanged
     When I PATCH resolved "/api/tasks/@id(alpha)" with body '{"workspace_id":@workspace(B),"status":"bogus"}'
-    Then the response status is an error
+    Then the response status is 400
     And the task "alpha" has workspace_id "@workspace(A)"
 
   Scenario: POST /api/tasks with workspace_id creates the task in that workspace

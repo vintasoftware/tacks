@@ -265,6 +265,11 @@
 
 /* Priority badges — light theme */
 /* 20% backgrounds and darkened text ensure ≥4.5:1 contrast for WCAG AA */
+.badge.priority-0 {
+  background-color: #991b1b;
+  color: #fff;
+  font-weight: 700;
+}
 .badge.priority-1 {
   background-color: color-mix(in srgb, #ef4444 20%, transparent);
   color: #991b1b;
@@ -875,6 +880,10 @@ a.view-toggle-btn:hover {
 
 /* Priority badges — dark theme */
 /* Backgrounds at 28-30%, lighter text for ≥4.5:1 on dark backgrounds */
+[data-theme="dark"] .badge.priority-0 {
+  background-color: #b91c1c;
+  color: #fff;
+}
 [data-theme="dark"] .badge.priority-1 {
   background-color: color-mix(in srgb, #ef4444 30%, transparent);
   color: #fca5a5;
@@ -2239,14 +2248,24 @@ a.view-toggle-btn:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.task-workspace .ws-move {
+  flex-basis: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
 .task-workspace select.workspace-move-select {
+  max-width: 24rem;
   width: auto;
   margin: 0;
   padding-top: 0.25rem;
   padding-bottom: 0.25rem;
 }
 
-.ws-move-hint {
+.task-workspace .ws-move-hint {
   color: var(--pico-muted-color, #6b7280);
 }
 

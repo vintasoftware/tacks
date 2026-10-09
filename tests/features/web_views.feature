@@ -227,3 +227,79 @@ Feature: Web view pages
     When I GET "/tasks"
     Then the response status is 200
     And the response body contains "/epics"
+
+  # ---------------------------------------------------------------------------
+  # Priority badges — P0 must not render as P4
+  # The filter dropdowns on /board and /tasks always contain one badge per
+  # priority, so a rendered task badge raises the count from 1 to 2.
+  # ---------------------------------------------------------------------------
+
+  Scenario: Board renders a P0 task with a P0 badge
+    Given I created a task via API with title "Urgent board task" and priority 0 as "p0-board"
+    When I GET "/board"
+    Then the response status is 200
+    And the response body contains '<span class="badge priority-0">▲▲ P0</span>' exactly 2 times
+    And the response body contains '<span class="badge priority-4">· P4</span>' exactly 1 times
+
+  Scenario: Board renders a P4 task with a P4 badge
+    Given I created a task via API with title "Backlog board task" and priority 4 as "p4-board"
+    When I GET "/board"
+    Then the response status is 200
+    And the response body contains '<span class="badge priority-4">· P4</span>' exactly 2 times
+    And the response body contains '<span class="badge priority-0">▲▲ P0</span>' exactly 1 times
+
+  Scenario: Board priority filter offers P0
+    When I GET "/board"
+    Then the response status is 200
+    And the response body contains 'data-value="0" data-label="▲▲ P0"'
+
+  Scenario: Task list renders a P0 task with a P0 badge
+    Given I created a task via API with title "Urgent list task" and priority 0 as "p0-list"
+    When I GET "/tasks"
+    Then the response status is 200
+    And the response body contains '<span class="badge priority-0">▲▲ P0</span>' exactly 2 times
+    And the response body contains '<span class="badge priority-4">· P4</span>' exactly 1 times
+
+  Scenario: Task list renders a P4 task with a P4 badge
+    Given I created a task via API with title "Backlog list task" and priority 4 as "p4-list"
+    When I GET "/tasks"
+    Then the response status is 200
+    And the response body contains '<span class="badge priority-4">· P4</span>' exactly 2 times
+    And the response body contains '<span class="badge priority-0">▲▲ P0</span>' exactly 1 times
+
+  Scenario: Task list priority filter offers P0
+    When I GET "/tasks"
+    Then the response status is 200
+    And the response body contains 'data-value="0" data-label="▲▲ P0"'
+
+  Scenario: Task list filtered to P0 shows only the P0 task
+    Given I created a task via API with title "Urgent filtered task" and priority 0 as "p0-filter"
+    And I created a task via API with title "Normal filtered task" and priority 2 as "p2-filter"
+    When I GET "/tasks?priority=0"
+    Then the response status is 200
+    And the response body contains "Urgent filtered task"
+    And the response body does not contain "Normal filtered task"
+
+  Scenario: Task detail renders a P0 task with a P0 badge
+    Given I created a task via API with title "Urgent detail task" and priority 0 as "p0-detail"
+    When I GET the HTML task "p0-detail"
+    Then the response status is 200
+    And the response body contains '<span class="badge priority-0">▲▲ P0</span>' exactly 1 times
+    And the response body contains '<span class="badge priority-4">· P4</span>' exactly 0 times
+
+  Scenario: Task detail renders a P4 task with a P4 badge
+    Given I created a task via API with title "Backlog detail task" and priority 4 as "p4-detail"
+    When I GET the HTML task "p4-detail"
+    Then the response status is 200
+    And the response body contains '<span class="badge priority-4">· P4</span>' exactly 1 times
+    And the response body contains '<span class="badge priority-0">▲▲ P0</span>' exactly 0 times
+
+  Scenario: Epic detail renders a P0 child with a P0 badge
+    Given I created a task via API with title "Priority epic" as "p0-epic"
+    When I POST resolved "/api/tasks" with body '{"title":"Urgent child","priority":0,"parent_id":"@id(p0-epic)"}'
+    Then the response status is 201
+    When I GET the HTML epic "p0-epic"
+    Then the response status is 200
+    And the response body contains "Urgent child"
+    And the response body does not contain "· P4"
+    And the response body contains "▲▲ P0"
