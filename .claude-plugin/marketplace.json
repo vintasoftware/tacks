@@ -1,7 +1,7 @@
 {
   "name": "tacks-marketplace",
   "description": "Lightweight task manager for AI coding agents",
-  "owner": {"name": "Stephen McCray"},
+  "owner": {"name": "Vinta Software", "url": "https://github.com/vintasoftware"},
   "plugins": [
     {
       "name": "tacks",

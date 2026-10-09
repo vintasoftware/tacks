@@ -6,9 +6,9 @@
     "name": "Stephen McCray",
     "url": "https://github.com/srmccray"
   },
-  "repository": "https://github.com/srmccray/tacks",
+  "repository": "https://github.com/vintasoftware/tacks",
   "license": "MIT",
-  "homepage": "https://github.com/srmccray/tacks",
+  "homepage": "https://github.com/vintasoftware/tacks",
   "keywords": ["task-management", "ai-workflow", "agent-memory", "backlog"],
   "hooks": {
     "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "tk prime"}]}],

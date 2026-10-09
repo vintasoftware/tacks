@@ -1,7 +1,7 @@
 {
   "name": "tacks-marketplace",
   "description": "Local marketplace for tacks plugin development",
-  "owner": {"name": "Stephen McCray"},
+  "owner": {"name": "Vinta Software", "url": "https://github.com/vintasoftware"},
   "plugins": [
     {
       "name": "tacks",
