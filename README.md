@@ -2,39 +2,72 @@
 
 Lightweight task manager for AI coding agents. Local-only, single-binary, SQLite-backed.
 
+This is the [vintasoftware](https://github.com/vintasoftware/tacks) fork of [srmccray/tacks](https://github.com/srmccray/tacks). It adds **workspace scoping**: one global database, tasks scoped per git worktree, and one web UI for all projects and workspaces. See [Workspace scoping](#workspace-scoping).
+
 ## Install
 
-### Pre-built binaries (recommended)
+The upstream installers, release binaries and the `tacks` crate on crates.io do **not** include the fork changes. Install from this repository with cargo.
+
+### 1. Rust toolchain
+
+You need `cargo` on your `PATH`. With [rustup](https://rustup.rs) it is in `~/.cargo/bin`. If you installed rustup with Homebrew, the toolchain proxies are in `/opt/homebrew/opt/rustup/bin`.
+
+Add both to your shell config. Use `~/.zshenv` (not only `~/.zshrc`) so that non-interactive shells, such as Claude Code hooks, also find `tk`:
 
 ```bash
-# macOS / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/srmccray/tacks/releases/latest/download/tacks-installer.sh | sh
-
-# Windows
-powershell -ExecutionPolicy ByPass -c "irm https://github.com/srmccray/tacks/releases/latest/download/tacks-installer.ps1 | iex"
+export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 ```
 
-Or download binaries directly from [GitHub Releases](https://github.com/srmccray/tacks/releases).
-
-### From crates.io
+### 2. The `tk` binary
 
 ```bash
-cargo install tacks
+cargo install --git https://github.com/vintasoftware/tacks --locked
+tk --version
+tk workspaces --help   # if this command exists, you have the fork
 ```
 
-### From source
+To update, run the same `cargo install` command again with `--force`.
+
+From a local clone:
 
 ```bash
-git clone https://github.com/srmccray/tacks.git
+git clone https://github.com/vintasoftware/tacks.git
 cd tacks
-cargo install --path .
+cargo install --path . --locked
 ```
+
+## Set up your agents (Claude Code)
+
+Do these steps once per machine. You do not need to do anything per repository or per worktree.
+
+1. Install the `tk` binary (see [Install](#install)).
+2. Install the Claude Code plugin. In Claude Code:
+
+   ```
+   /plugin marketplace add vintasoftware/tacks
+   /plugin install tacks@tacks-marketplace
+   ```
+
+   The plugin runs `tk prime` at session start and before compaction, and adds `/tacks:*` slash commands.
+3. Install the global rules file:
+
+   ```bash
+   tk init-rules --global   # writes ~/.claude/rules/tacks.md
+   ```
+
+   This file teaches every agent, in every repository, the `tk` commands, the workflow and the scoping rules. You need it because `tk prime` is silent in a workspace that has no tasks yet. Without the rules file, an agent in a new worktree gets no tacks context.
+
+   To use tacks only in some repositories, run `tk init-rules` (without `--global`) in each of them instead. This writes `.claude/rules/tacks.md` in the repository.
+4. Start a new Claude Code session (or run `/reload-plugins`). Sessions that are already open do not load the new rules.
+
+Each agent now sees only the tasks of its own worktree. To see the full board, run `tk serve`.
 
 ## Quick start
 
+You do not need `tk init`. The database `~/.tacks/tacks.db` is created on first use, and the current git worktree is detected automatically.
+
 ```bash
-tk init                              # initialize the global database (~/.tacks/tacks.db)
-tk create "Implement auth" -p 1      # create a P1 task
+tk create "Implement auth" -p 1      # create a P1 task in this worktree
 tk create "Write tests" -d "Unit and integration tests for auth module"
 tk list                              # show open tasks
 tk ready                             # tasks with no blockers
@@ -42,7 +75,14 @@ tk update <id> --claim               # claim a task (sets in_progress + assignee
 tk update <id> --parent <epic-id>    # reparent task under an epic
 tk update <id> --parent none         # promote subtask to top-level
 tk close <id> -c "Done"              # close with comment
+
+tk list --scope project              # tasks of every worktree of this repository
+tk list --scope all                  # every task in the database
+tk workspaces                        # projects and workspaces with task counts
+tk update <id> --move-to ../other-worktree   # move a task (and its subtasks)
 ```
+
+Use `tk init --prefix <prefix>` only to change the task ID prefix. The prefix applies to the whole global database.
 
 ## Commands
 
@@ -73,12 +113,22 @@ Global flags: `--db <path>` (`TACKS_DB`), `--workspace <path>` (`TACKS_WORKSPACE
 
 ## Web UI
 
-Tacks includes a built-in web interface. Start it with:
+Tacks includes a built-in web interface. One instance shows every project and workspace in the global database. Start it from any directory:
 
 ```bash
 tk serve              # http://localhost:3000
 tk serve --port 8080  # custom port
 ```
+
+The sidebar shows **All**, then each project with its workspaces. The scope is in the URL:
+
+| URL | Shows |
+|-----|-------|
+| `/board`, `/tasks`, `/epics` | All projects |
+| `/p/<project-id>/board` | Every workspace of one project |
+| `/p/<project-id>/w/<workspace-id>/board` | One workspace |
+
+A workspace whose directory was deleted shows a "missing" marker. Its tasks stay in the project, and you can move them to another workspace from the task detail.
 
 ### Board view
 
@@ -110,14 +160,14 @@ Tacks ships a Claude Code plugin that wires `tk` commands into slash commands an
 ### Install from marketplace
 
 ```bash
-/plugin marketplace add srmccray/tacks
+/plugin marketplace add vintasoftware/tacks
 /plugin install tacks@tacks-marketplace
 ```
 
 ### Manual install from local clone
 
 ```bash
-git clone https://github.com/srmccray/tacks.git
+git clone https://github.com/vintasoftware/tacks.git
 cd tacks
 
 # Option 1: Session-scoped (for testing)
@@ -133,7 +183,7 @@ claude --plugin-dir ./claude-plugin
 ### What the plugin provides
 
 - **Slash commands** for all `tk` operations: `/tacks:create`, `/tacks:list`, `/tacks:ready`, `/tacks:show`, `/tacks:update`, `/tacks:close`, `/tacks:dep`, `/tacks:comment`, `/tacks:children`, `/tacks:epic`, `/tacks:blocked`, `/tacks:stats`, `/tacks:prime`, `/tacks:init`, `/tacks:workspaces`
-- **SessionStart hook** that auto-loads backlog context via `tk prime` — every session starts with full situational awareness
+- **SessionStart hook** that auto-loads backlog context via `tk prime` for the current workspace (silent in workspaces that have no tasks; install the rules file too, see [Set up your agents](#set-up-your-agents-claude-code))
 - **PreCompact hook** that re-runs `tk prime` before context compaction to preserve backlog state
 - **Task agent** (`@task-agent`) for autonomous work discovery: finds ready tasks, claims them, executes, files discoveries, and closes on completion
 
