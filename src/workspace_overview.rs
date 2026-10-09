@@ -26,6 +26,8 @@ pub struct WorkspaceRow {
     pub in_progress: i64,
     pub blocked: i64,
     pub done: i64,
+    /// When the workspace was archived (hidden from the web UI), else null.
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Build the workspaces overview rows: every workspace with its task counts, plus an
@@ -60,6 +62,7 @@ pub fn workspace_rows(db: &Database, current: Option<i64>) -> Result<Vec<Workspa
             in_progress: c.map_or(0, |c| c.in_progress),
             blocked: c.map_or(0, |c| c.blocked),
             done: c.map_or(0, |c| c.done),
+            archived_at: w.archived_at,
         });
     }
     if let Some(c) = counts.get(&None).filter(|c| c.total() > 0) {
@@ -75,6 +78,7 @@ pub fn workspace_rows(db: &Database, current: Option<i64>) -> Result<Vec<Workspa
             in_progress: c.in_progress,
             blocked: c.blocked,
             done: c.done,
+            archived_at: None,
         });
     }
     Ok(rows)

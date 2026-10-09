@@ -3,7 +3,7 @@
     <li>
       <a class="scope-link scope-all{% if sb.all_active %} scope-active{% endif %}"
          data-scope-prefix=""
-         href="/{{ layout.view }}"{% if sb.all_active %} aria-current="page"{% endif %}>
+         href="/board"{% if sb.all_active %} aria-current="page"{% endif %}>
         <span class="scope-name">All</span>
         <span class="scope-count" title="Tasks not done">{{ sb.all_open }}</span>
       </a>
@@ -12,7 +12,7 @@
     <li class="scope-project">
       <a class="scope-link scope-project-link{% if p.active %} scope-active{% endif %}"
          data-scope-prefix="/p/{{ p.id }}"
-         href="/p/{{ p.id }}/{{ layout.view }}"{% if p.active %} aria-current="page"{% endif %}>
+         href="/p/{{ p.id }}/board"{% if p.active %} aria-current="page"{% endif %}>
         <span class="scope-name">{{ p.name }}</span>
         <span class="scope-count" title="Tasks not done">{{ p.open }}</span>
       </a>
@@ -21,7 +21,7 @@
         <li>
           <a class="scope-link scope-workspace-link{% if w.active %} scope-active{% endif %}{% if w.missing %} scope-missing{% endif %}"
              data-scope-prefix="/p/{{ p.id }}/w/{{ w.id }}"
-             href="/p/{{ p.id }}/w/{{ w.id }}/{{ layout.view }}"
+             href="/p/{{ p.id }}/w/{{ w.id }}/board"
              title="{{ w.path }}{% if w.missing %} (path no longer exists){% endif %}"
              {%- if w.active %} aria-current="page"{% endif %}>
             <span class="scope-name">{{ w.name }}</span>
@@ -34,4 +34,17 @@
     </li>
     {% endfor %}
   </ul>
+  {% if !sb.archived.is_empty() %}
+  <details class="scope-archived">
+    <summary>Archived <span class="scope-count">{{ sb.archived.len() }}</span></summary>
+    <ul class="scope-list">
+      {% for a in sb.archived.iter() %}
+      <li class="scope-archived-item">
+        <span class="scope-name" title="{{ a.project_name }} / {{ a.name }}: {{ a.path }}">{{ a.name }}</span>
+        <button type="button" class="scope-restore secondary outline" data-ws-restore="{{ a.id }}" data-ws-name="{{ a.name }}" aria-label="Restore workspace {{ a.name }}">Restore</button>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
 </aside>

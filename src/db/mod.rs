@@ -9,7 +9,7 @@ use crate::models::{
 };
 
 /// Latest schema version known to this build.
-const LATEST_SCHEMA_VERSION: i32 = 4;
+const LATEST_SCHEMA_VERSION: i32 = 5;
 
 /// Which tasks a list-type query should cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +22,11 @@ pub enum ScopeFilter {
     Workspace(i64),
     /// Tasks with no workspace (`workspace_id IS NULL`).
     Unscoped,
+    /// Every task except those of archived workspaces (unscoped tasks stay visible).
+    /// Used by the web UI; the CLI uses `All`.
+    AllVisible,
+    /// Like `Project`, but skips archived workspaces of the project.
+    ProjectVisible(i64),
     /// Matches no task at all (e.g. a scope that is registered nowhere).
     Nothing,
 }
@@ -35,6 +40,20 @@ impl ScopeFilter {
             ScopeFilter::All => None,
             ScopeFilter::Unscoped => Some((format!("{column} IS NULL"), None)),
             ScopeFilter::Nothing => Some(("1 = 0".to_string(), None)),
+            ScopeFilter::AllVisible => Some((
+                format!(
+                    "({column} IS NULL OR {column} NOT IN \
+                     (SELECT id FROM workspaces WHERE archived_at IS NOT NULL))"
+                ),
+                None,
+            )),
+            ScopeFilter::ProjectVisible(id) => Some((
+                format!(
+                    "{column} IN (SELECT id FROM workspaces \
+                     WHERE project_id = ?{idx} AND archived_at IS NULL)"
+                ),
+                Some(*id),
+            )),
             ScopeFilter::Workspace(id) => Some((format!("{column} = ?{idx}"), Some(*id))),
             ScopeFilter::Project(id) => Some((
                 format!("{column} IN (SELECT id FROM workspaces WHERE project_id = ?{idx})"),
@@ -1033,7 +1052,8 @@ impl Database {
     }
 
     /// Insert a workspace under `project_id`, or return the existing row when a workspace
-    /// with that path is already registered (project and name are not updated).
+    /// with that path is already registered (project and name are not updated). An archived
+    /// workspace is restored (its id stays the same).
     pub fn upsert_workspace(
         &self,
         project_id: i64,
@@ -1042,6 +1062,10 @@ impl Database {
     ) -> Result<Workspace, String> {
         // Look up first: a conflicting INSERT on an AUTOINCREMENT table still consumes an id.
         if let Some(existing) = self.find_workspace_by_path(path)? {
+            if existing.archived_at.is_some() {
+                // Registering an archived path again brings it (and its tasks) back.
+                return self.restore_workspace(existing.id);
+            }
             return Ok(existing);
         }
         self.conn
@@ -1066,7 +1090,7 @@ impl Database {
     /// Look up a workspace by its canonical path.
     pub fn find_workspace_by_path(&self, path: &str) -> Result<Option<Workspace>, String> {
         self.query_optional(
-            "SELECT id, project_id, path, name, created_at FROM workspaces WHERE path = ?1",
+            "SELECT id, project_id, path, name, created_at, archived_at FROM workspaces WHERE path = ?1",
             params![path],
             row_to_workspace,
         )
@@ -1075,7 +1099,7 @@ impl Database {
     /// Look up a workspace by id.
     pub fn get_workspace(&self, id: i64) -> Result<Option<Workspace>, String> {
         self.query_optional(
-            "SELECT id, project_id, path, name, created_at FROM workspaces WHERE id = ?1",
+            "SELECT id, project_id, path, name, created_at, archived_at FROM workspaces WHERE id = ?1",
             params![id],
             row_to_workspace,
         )
@@ -1128,7 +1152,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT w.id, w.project_id, w.path, w.name, w.created_at
+                "SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.archived_at
                  FROM workspaces w JOIN projects p ON p.id = w.project_id
                  ORDER BY p.name, p.id, w.name, w.id",
             )
@@ -1201,6 +1225,86 @@ impl Database {
                     params![task_id, workspace_id, Utc::now().to_rfc3339()],
                 )
                 .map_err(|e| format!("failed to move task: {e}"))
+        })
+    }
+
+    /// Archive a workspace (soft, reversible): sets `archived_at` when it is NULL, so
+    /// repeating the call keeps the original timestamp. Tasks are never modified.
+    pub fn archive_workspace(&self, id: i64) -> Result<Workspace, String> {
+        self.get_workspace(id)?
+            .ok_or_else(|| format!("workspace not found: {id}"))?;
+        self.conn
+            .execute(
+                "UPDATE workspaces SET archived_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
+                params![Utc::now().to_rfc3339(), id],
+            )
+            .map_err(|e| format!("failed to archive workspace: {e}"))?;
+        self.get_workspace(id)?
+            .ok_or_else(|| format!("workspace not found: {id}"))
+    }
+
+    /// Restore an archived workspace (clears `archived_at`). Idempotent.
+    pub fn restore_workspace(&self, id: i64) -> Result<Workspace, String> {
+        self.get_workspace(id)?
+            .ok_or_else(|| format!("workspace not found: {id}"))?;
+        self.conn
+            .execute(
+                "UPDATE workspaces SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL",
+                params![id],
+            )
+            .map_err(|e| format!("failed to restore workspace: {e}"))?;
+        self.get_workspace(id)?
+            .ok_or_else(|| format!("workspace not found: {id}"))
+    }
+
+    /// Number of tasks in the workspace that are not done (what
+    /// [`Database::close_workspace_tasks`] would close).
+    pub fn count_open_workspace_tasks(&self, workspace_id: i64) -> Result<i64, String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE workspace_id = ?1 AND status != 'done'",
+                params![workspace_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("query error: {e}"))
+    }
+
+    /// Close every not-done task of a workspace in one transaction, with `reason` as the
+    /// close reason. When `comment` is given it is added (with `author`) to each closed
+    /// task. Parent epic statuses are synced like `close_task` does. Already-done tasks are
+    /// untouched. Returns the number of tasks closed.
+    pub fn close_workspace_tasks(
+        &self,
+        workspace_id: i64,
+        reason: &str,
+        comment: Option<&str>,
+        author: Option<&str>,
+    ) -> Result<usize, String> {
+        validate_close_reason(reason)?;
+        self.get_workspace(workspace_id)?
+            .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
+
+        self.with_savepoint(|| {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id FROM tasks WHERE workspace_id = ?1 AND status != 'done' ORDER BY id",
+                )
+                .map_err(|e| format!("query error: {e}"))?;
+            let ids = stmt
+                .query_map(params![workspace_id], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("query error: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("row error: {e}"))?;
+            drop(stmt);
+
+            for id in &ids {
+                self.close_task(id, Some(reason))?;
+                if let Some(body) = comment {
+                    self.add_comment_by(id, body, author)?;
+                }
+            }
+            Ok(ids.len())
         })
     }
 
@@ -1524,6 +1628,14 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
         )?;
     }
 
+    if version < 5 {
+        apply_migration(
+            conn,
+            5,
+            "ALTER TABLE workspaces ADD COLUMN archived_at TEXT;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1592,6 +1704,7 @@ fn row_to_workspace(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         path: row.get(2)?,
         name: row.get(3)?,
         created_at: parse_ts(&row.get::<_, String>(4)?),
+        archived_at: row.get::<_, Option<String>>(5)?.map(|t| parse_ts(&t)),
     })
 }
 
@@ -2301,6 +2414,11 @@ mod tests {
                      assignee TEXT, parent_id TEXT, tags TEXT NOT NULL DEFAULT '',
                      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                      close_reason TEXT, notes TEXT, workspace_id INTEGER);
+                 CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL);
+                 CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     project_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                     name TEXT NOT NULL, created_at TEXT NOT NULL);
                  CREATE TABLE dependencies (child_id TEXT NOT NULL, parent_id TEXT NOT NULL,
                      PRIMARY KEY (child_id, parent_id));
                  CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2439,5 +2557,267 @@ mod tests {
                 .is_empty()
         );
         db.mark_comments_delivered(&[]).unwrap();
+    }
+
+    #[test]
+    fn test_migration_from_v4_adds_archived_at() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("v4.db");
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL);
+                 CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     project_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                     name TEXT NOT NULL, created_at TEXT NOT NULL);
+                 CREATE TABLE tasks (
+                     id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+                     status TEXT NOT NULL DEFAULT 'open', priority INTEGER NOT NULL DEFAULT 2,
+                     assignee TEXT, parent_id TEXT, tags TEXT NOT NULL DEFAULT '',
+                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                     close_reason TEXT, notes TEXT, workspace_id INTEGER);
+                 CREATE TABLE dependencies (child_id TEXT NOT NULL, parent_id TEXT NOT NULL,
+                     PRIMARY KEY (child_id, parent_id));
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
+                     author TEXT, delivered_at TEXT);
+                 INSERT INTO config VALUES ('schema_version', '4');
+                 INSERT INTO projects VALUES (1, '/r', 'r', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO workspaces VALUES (1, 1, '/r/w', 'w', '2024-01-01T00:00:00+00:00');",
+            )
+            .expect("seed v4");
+        }
+        let db = Database::open(&path).expect("open migrates");
+        assert_eq!(get_schema_version(&db.conn).unwrap(), LATEST_SCHEMA_VERSION);
+        let ws = db.get_workspace(1).unwrap().expect("workspace kept");
+        assert!(ws.archived_at.is_none());
+    }
+
+    #[test]
+    fn test_archive_and_restore_are_idempotent() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let t = task_in(&db, "a", Some(w1.id));
+        let t = db.get_task(&t.id).unwrap().unwrap();
+
+        let first = db.archive_workspace(w1.id).unwrap();
+        let stamp = first.archived_at.expect("archived");
+        let again = db.archive_workspace(w1.id).unwrap();
+        assert_eq!(
+            again.archived_at,
+            Some(stamp),
+            "timestamp kept on re-archive"
+        );
+        // tasks are untouched
+        let after = db.get_task(&t.id).unwrap().unwrap();
+        assert_eq!(after.updated_at, t.updated_at);
+        assert_eq!(after.workspace_id, Some(w1.id));
+        // list_workspaces still returns it
+        assert!(db.list_workspaces().unwrap().iter().any(|w| w.id == w1.id));
+
+        assert!(db.restore_workspace(w1.id).unwrap().archived_at.is_none());
+        assert!(db.restore_workspace(w1.id).unwrap().archived_at.is_none());
+        assert!(db.archive_workspace(9999).is_err());
+        assert!(db.restore_workspace(9999).is_err());
+    }
+
+    #[test]
+    fn test_upsert_workspace_restores_archived_and_keeps_id() {
+        let (db, _d) = open_test_db();
+        let (p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        db.archive_workspace(w1.id).unwrap();
+        let again = db.upsert_workspace(p1.id, &w1.path, &w1.name).unwrap();
+        assert_eq!(again.id, w1.id);
+        assert!(again.archived_at.is_none());
+        assert!(
+            db.get_workspace(w1.id)
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_visible_scopes_exclude_archived_workspaces() {
+        let (db, _d) = open_test_db();
+        let (p1, _p2, w1, w2, w3) = setup_scopes(&db);
+        let a = task_in(&db, "a", Some(w1.id));
+        let b = task_in(&db, "b", Some(w2.id));
+        let c = task_in(&db, "c", Some(w3.id));
+        let u = task_in(&db, "u", None);
+        let blocker = task_in(&db, "blocker", Some(w1.id));
+        db.add_dependency(&b.id, &blocker.id).unwrap();
+        for t in [&a, &b, &c, &u] {
+            db.add_comment_by(&t.id, "hi", Some("user")).unwrap();
+        }
+        db.archive_workspace(w1.id).unwrap();
+
+        let list = |s: ScopeFilter| {
+            ids(&db
+                .list_tasks(true, None, None, None, None, None, None, &s)
+                .unwrap())
+        };
+        assert_eq!(list(ScopeFilter::All).len(), 5, "CLI scope sees everything");
+        assert_eq!(
+            list(ScopeFilter::AllVisible),
+            sorted(vec![b.id.clone(), c.id.clone(), u.id.clone()])
+        );
+        assert_eq!(list(ScopeFilter::ProjectVisible(p1.id)), vec![b.id.clone()]);
+        assert_eq!(list(ScopeFilter::Project(p1.id)).len(), 3);
+
+        let ready = db.get_ready_tasks(None, &ScopeFilter::AllVisible).unwrap();
+        assert_eq!(ids(&ready), sorted(vec![c.id.clone(), u.id.clone()]));
+        // the blocked task's blocker is archived but b itself is visible
+        let blocked = db.get_blocked_tasks(&ScopeFilter::AllVisible).unwrap();
+        assert_eq!(ids(&blocked), vec![b.id.clone()]);
+
+        let total = |v: Vec<(String, i64)>| v.iter().map(|(_, n)| n).sum::<i64>();
+        assert_eq!(
+            total(db.task_count_by_status(&ScopeFilter::AllVisible).unwrap()),
+            3
+        );
+        assert_eq!(
+            total(
+                db.task_count_by_status(&ScopeFilter::ProjectVisible(p1.id))
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            db.task_count_by_priority(&ScopeFilter::AllVisible)
+                .unwrap()
+                .iter()
+                .map(|(_, n)| n)
+                .sum::<i64>(),
+            3
+        );
+
+        let pending = |s: ScopeFilter| {
+            let mut v: Vec<String> = db
+                .pending_user_comments(&s)
+                .unwrap()
+                .into_iter()
+                .map(|p| p.task_id)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(pending(ScopeFilter::All).len(), 4);
+        assert_eq!(
+            pending(ScopeFilter::AllVisible),
+            sorted(vec![b.id.clone(), c.id.clone(), u.id.clone()])
+        );
+        assert_eq!(
+            db.pending_user_comment_count_by_task(&ScopeFilter::ProjectVisible(p1.id))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        db.restore_workspace(w1.id).unwrap();
+        assert_eq!(list(ScopeFilter::AllVisible).len(), 5);
+    }
+
+    #[test]
+    fn test_close_workspace_tasks_closes_only_that_workspaces_open_tasks() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, w2, _w3) = setup_scopes(&db);
+        let open = task_in(&db, "open", Some(w1.id));
+        let wip = task_in(&db, "wip", Some(w1.id));
+        db.update_task(
+            &wip.id,
+            None,
+            None,
+            Some("in_progress"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let done = task_in(&db, "done", Some(w1.id));
+        db.update_task(
+            &done.id,
+            None,
+            None,
+            Some("done"),
+            None,
+            None,
+            Some("stale"),
+            None,
+        )
+        .unwrap();
+        let done_before = db.get_task(&done.id).unwrap().unwrap();
+        let other = task_in(&db, "other", Some(w2.id));
+        let unscoped = task_in(&db, "unscoped", None);
+
+        assert_eq!(db.count_open_workspace_tasks(w1.id).unwrap(), 2);
+        assert!(
+            db.close_workspace_tasks(w1.id, "bogus", None, None)
+                .is_err()
+        );
+        assert!(db.close_workspace_tasks(9999, "done", None, None).is_err());
+
+        let n = db
+            .close_workspace_tasks(w1.id, "done", Some("wrapping up"), Some("user"))
+            .unwrap();
+        assert_eq!(n, 2);
+        for t in [&open, &wip] {
+            let got = db.get_task(&t.id).unwrap().unwrap();
+            assert_eq!(got.status, Status::Done);
+            assert_eq!(got.close_reason.as_deref(), Some("done"));
+            let c = db.get_comments(&t.id).unwrap();
+            assert_eq!(c.len(), 1);
+            assert_eq!(c[0].body, "wrapping up");
+            assert_eq!(c[0].author.as_deref(), Some("user"));
+        }
+        let done_after = db.get_task(&done.id).unwrap().unwrap();
+        assert_eq!(done_after.updated_at, done_before.updated_at);
+        assert_eq!(done_after.close_reason.as_deref(), Some("stale"));
+        assert!(db.get_comments(&done.id).unwrap().is_empty());
+        for t in [&other, &unscoped] {
+            assert_eq!(db.get_task(&t.id).unwrap().unwrap().status, Status::Open);
+        }
+        assert_eq!(db.count_open_workspace_tasks(w1.id).unwrap(), 0);
+        assert_eq!(
+            db.close_workspace_tasks(w1.id, "done", None, None).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_close_workspace_tasks_syncs_epic_in_other_workspace() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, w2, _w3) = setup_scopes(&db);
+        let epic = task_in(&db, "epic", Some(w1.id));
+        let child = task_in(&db, "child", Some(w1.id));
+        db.update_task_with_parent(
+            &child.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(&epic.id)),
+        )
+        .unwrap();
+        db.set_task_workspace(&epic.id, Some(w2.id)).unwrap();
+        // moving the epic moved its subtree; move the child back to w1 explicitly
+        db.conn
+            .execute(
+                "UPDATE tasks SET workspace_id = ?1 WHERE id = ?2",
+                params![w1.id, child.id],
+            )
+            .unwrap();
+        assert_eq!(
+            db.close_workspace_tasks(w1.id, "done", None, None).unwrap(),
+            1
+        );
+        assert_eq!(db.get_task(&epic.id).unwrap().unwrap().status, Status::Done);
     }
 }

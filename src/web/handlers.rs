@@ -26,9 +26,10 @@ fn render_template<T: Template>(template: T) -> Response {
     }
 }
 
-/// Index page handler — renders the home template.
+/// Index page handler: the board is the default view. A temporary redirect, so browsers
+/// that cached the former `/` to `/tasks` redirect do not keep following it.
 pub async fn index() -> Redirect {
-    Redirect::permanent("/tasks")
+    Redirect::temporary("/board")
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +859,125 @@ pub async fn api_workspaces(State(state): State<AppState>) -> Result<impl IntoRe
     .map_err(AppError::Internal)?;
 
     Ok(Json(rows))
+}
+
+/// Parse an id path segment of the workspace endpoints (digits only), else 404.
+fn workspace_path_id(raw: &str) -> Result<i64, AppError> {
+    crate::web::scope::parse_id(raw)
+        .ok_or_else(|| AppError::NotFound("workspace not found".to_string()))
+}
+
+/// Map a database error of a workspace operation to an HTTP error.
+fn workspace_db_error(e: String) -> AppError {
+    if e.contains("not found") {
+        AppError::NotFound("workspace not found".to_string())
+    } else {
+        AppError::Internal(e)
+    }
+}
+
+/// GET /api/workspaces/:id — One workspace (200 or 404): the workspace fields plus
+/// `project_name` and `open_count` (tasks not done, what close-all would close).
+pub async fn api_get_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let id = workspace_path_id(&id)?;
+    let db = state.db.clone();
+    let value = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let db = db.lock().unwrap();
+        let ws = db
+            .get_workspace(id)?
+            .ok_or_else(|| format!("workspace not found: {id}"))?;
+        let project_name = db.get_project(ws.project_id)?.map(|p| p.name);
+        let open_count = db.count_open_workspace_tasks(id)?;
+        let mut value = serde_json::to_value(&ws).map_err(|e| format!("json error: {e}"))?;
+        if let Value::Object(map) = &mut value {
+            map.insert("project_name".to_string(), project_name.into());
+            map.insert("open_count".to_string(), open_count.into());
+        }
+        Ok(value)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(workspace_db_error)?;
+    Ok(Json(value))
+}
+
+/// POST /api/workspaces/:id/archive — Hide a workspace and its tasks from the web UI
+/// (200 with the workspace, 404). Tasks are not modified; repeating the call is harmless.
+pub async fn api_archive_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let id = workspace_path_id(&id)?;
+    let db = state.db.clone();
+    let ws = tokio::task::spawn_blocking(move || {
+        let db = db.lock().unwrap();
+        db.archive_workspace(id)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(workspace_db_error)?;
+    Ok(Json(ws))
+}
+
+/// POST /api/workspaces/:id/restore — Bring an archived workspace back (200 with the
+/// workspace, 404). Idempotent.
+pub async fn api_restore_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let id = workspace_path_id(&id)?;
+    let db = state.db.clone();
+    let ws = tokio::task::spawn_blocking(move || {
+        let db = db.lock().unwrap();
+        db.restore_workspace(id)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(workspace_db_error)?;
+    Ok(Json(ws))
+}
+
+/// Optional JSON body of POST /api/workspaces/:id/close-all.
+#[derive(Debug, Default, Deserialize)]
+pub struct CloseAllBody {
+    /// Close reason (default `done`).
+    pub reason: Option<String>,
+    /// Comment added to every closed task (author `user`).
+    pub comment: Option<String>,
+}
+
+/// POST /api/workspaces/:id/close-all — Close every task of the workspace that is not
+/// done (200 with `{"closed": N}`, 404, 422 for an invalid reason). The JSON body is
+/// optional: `{"reason": "done", "comment": "..."}`.
+pub async fn api_close_all_workspace_tasks(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let id = workspace_path_id(&id)?;
+    let body: CloseAllBody = if body.iter().all(u8::is_ascii_whitespace) {
+        CloseAllBody::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|e| AppError::BadRequest(e.to_string()))?
+    };
+    let reason = body.reason.unwrap_or_else(|| "done".to_string());
+    validate_close_reason(&reason).map_err(AppError::Validation)?;
+    let comment = body
+        .comment
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+    let db = state.db.clone();
+    let closed = tokio::task::spawn_blocking(move || {
+        let db = db.lock().unwrap();
+        db.close_workspace_tasks(id, &reason, comment.as_deref(), Some("user"))
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(workspace_db_error)?;
+    Ok(Json(serde_json::json!({ "closed": closed })))
 }
 
 /// GET /api/poll — Lightweight change-detection endpoint for HTMX polling.

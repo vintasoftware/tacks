@@ -28,6 +28,8 @@ pub struct WsInfo {
     pub project_name: String,
     /// True when `path` no longer exists on disk.
     pub missing: bool,
+    /// True when the workspace was removed (archived) in the web UI.
+    pub archived: bool,
 }
 
 /// One `<option>` of a workspace `<select>`.
@@ -36,6 +38,8 @@ pub struct WsOption {
     pub id: i64,
     pub name: String,
     pub missing: bool,
+    /// Archived workspaces are only listed when they are the task's current workspace.
+    pub archived: bool,
     pub selected: bool,
     /// Missing workspaces cannot be chosen as a target unless already selected.
     pub disabled: bool,
@@ -70,22 +74,48 @@ pub struct SidebarProject {
     pub workspaces: Vec<SidebarWorkspace>,
 }
 
-/// Sidebar contents: the "All" entry and every project with its workspaces.
+/// One archived workspace in the sidebar's collapsed "Archived" group.
+#[derive(Debug, Clone)]
+pub struct SidebarArchived {
+    pub id: i64,
+    pub name: String,
+    pub project_name: String,
+    pub path: String,
+    /// Tasks that are not done (they stay hidden until the workspace is restored).
+    pub open: i64,
+}
+
+/// Sidebar contents: the "All" entry, every project with its visible workspaces and the
+/// archived workspaces.
 #[derive(Debug, Clone)]
 pub struct Sidebar {
     pub all_active: bool,
     pub all_open: i64,
     pub projects: Vec<SidebarProject>,
+    pub archived: Vec<SidebarArchived>,
+}
+
+/// The scope header shown above the content: `project / workspace` or "All projects".
+#[derive(Debug, Clone)]
+pub struct ScopeHeader {
+    /// Project name; `None` in the All scope.
+    pub project_name: Option<String>,
+    /// URL prefix of the project scope (`/p/1`), when a project is selected.
+    pub project_prefix: Option<String>,
+    /// The selected workspace (workspace scope only).
+    pub workspace: Option<WsInfo>,
 }
 
 /// What base.html needs: URL prefix for the current scope, the current view
-/// (`tasks`, `board`, `epics`) and the sidebar (absent for HTMX requests).
+/// (`tasks`, `board`, `epics`), the sidebar and the scope header (both absent for HTMX
+/// requests).
 #[derive(Debug, Clone)]
 pub struct Layout {
     /// `""`, `"/p/1"` or `"/p/1/w/2"`. Prepend to `/board`, `/tasks`, `/epics`.
     pub prefix: String,
     pub view: &'static str,
     pub sidebar: Option<Arc<Sidebar>>,
+    pub header: Option<Arc<ScopeHeader>>,
 }
 
 /// The scope of an HTML request, resolved from the URL path.
@@ -98,10 +128,12 @@ pub struct Scope {
     pub workspace_id: Option<i64>,
     /// The request came from HTMX (`HX-Request`), so no sidebar is rendered.
     pub is_htmx: bool,
-    /// Every workspace, ordered by project name then workspace name.
+    /// Every workspace (archived ones included), ordered by project name then workspace
+    /// name. Use [`Scope::groups`] / [`Scope::default_workspace_id`] for selectable ones.
     pub workspaces: Arc<Vec<WsInfo>>,
     by_id: Arc<HashMap<i64, WsInfo>>,
     sidebar: Option<Arc<Sidebar>>,
+    header: Option<Arc<ScopeHeader>>,
     /// Raw path parameters other than the scope ones (e.g. `id` of `/epics/{id}`).
     params: Arc<HashMap<String, String>>,
 }
@@ -113,6 +145,7 @@ impl Scope {
             prefix: self.prefix.clone(),
             view,
             sidebar: self.sidebar.clone(),
+            header: self.header.clone(),
         }
     }
 
@@ -143,15 +176,16 @@ impl Scope {
         let mut groups: Vec<(i64, WsGroup)> = Vec::new();
         for w in self.workspaces.iter() {
             let is_selected = selected == Some(w.id);
-            if w.missing && !include_missing && !is_selected {
+            if (w.missing && !include_missing || w.archived) && !is_selected {
                 continue;
             }
             let opt = WsOption {
                 id: w.id,
                 name: w.name.clone(),
                 missing: w.missing,
+                archived: w.archived,
                 selected: is_selected,
-                disabled: w.missing && !is_selected,
+                disabled: (w.missing || w.archived) && !is_selected,
             };
             match groups.last_mut() {
                 Some((pid, g)) if *pid == w.project_id => g.options.push(opt),
@@ -176,7 +210,7 @@ impl Scope {
         let project = self.project_id?;
         self.workspaces
             .iter()
-            .find(|w| w.project_id == project && !w.missing)
+            .find(|w| w.project_id == project && !w.missing && !w.archived)
             .map(|w| w.id)
     }
 }
@@ -207,6 +241,7 @@ fn load_workspaces(db: &Database, check_missing: bool) -> Result<Vec<WsInfo>, St
             project_name: names.get(&w.project_id).cloned().unwrap_or_default(),
             project_id: w.project_id,
             missing: check_missing && !FsPath::new(&w.path).exists(),
+            archived: w.archived_at.is_some(),
             name: w.name,
             path: w.path,
         })
@@ -214,6 +249,8 @@ fn load_workspaces(db: &Database, check_missing: bool) -> Result<Vec<WsInfo>, St
 }
 
 /// Build the sidebar tree with non-done task counts and the active scope highlighted.
+/// Archived workspaces are left out of the tree and of every count; they are listed
+/// separately. Projects whose workspaces are all archived are hidden unless active.
 fn build_sidebar(
     db: &Database,
     workspaces: &[WsInfo],
@@ -225,7 +262,17 @@ fn build_sidebar(
         .into_iter()
         .map(|c| (c.workspace_id, c.open + c.in_progress + c.blocked))
         .collect();
-    let all_open: i64 = counts.values().sum();
+    let open_of = |id: i64| counts.get(&Some(id)).copied().unwrap_or(0);
+    let archived_ids: std::collections::HashSet<i64> = workspaces
+        .iter()
+        .filter(|w| w.archived)
+        .map(|w| w.id)
+        .collect();
+    let all_open: i64 = counts
+        .iter()
+        .filter(|(k, _)| k.is_none_or(|id| !archived_ids.contains(&id)))
+        .map(|(_, v)| v)
+        .sum();
     let mut projects: Vec<SidebarProject> = Vec::new();
     for p in db.list_projects()? {
         let mut sp = SidebarProject {
@@ -235,8 +282,13 @@ fn build_sidebar(
             active: project_id == Some(p.id) && workspace_id.is_none(),
             workspaces: Vec::new(),
         };
+        let mut has_archived = false;
         for w in workspaces.iter().filter(|w| w.project_id == p.id) {
-            let open = counts.get(&Some(w.id)).copied().unwrap_or(0);
+            if w.archived {
+                has_archived = true;
+                continue;
+            }
+            let open = open_of(w.id);
             sp.open += open;
             sp.workspaces.push(SidebarWorkspace {
                 id: w.id,
@@ -247,12 +299,27 @@ fn build_sidebar(
                 active: workspace_id == Some(w.id),
             });
         }
+        if sp.workspaces.is_empty() && has_archived && project_id != Some(p.id) {
+            continue;
+        }
         projects.push(sp);
     }
+    let archived = workspaces
+        .iter()
+        .filter(|w| w.archived)
+        .map(|w| SidebarArchived {
+            id: w.id,
+            name: w.name.clone(),
+            project_name: w.project_name.clone(),
+            path: w.path.clone(),
+            open: open_of(w.id),
+        })
+        .collect();
     Ok(Sidebar {
         all_active: project_id.is_none() && workspace_id.is_none(),
         all_open,
         projects,
+        archived,
     })
 }
 
@@ -283,17 +350,18 @@ impl FromRequestParts<AppState> for Scope {
         };
 
         let db = state.db.clone();
-        let (workspaces, sidebar, project_exists) = tokio::task::spawn_blocking(move || {
+        let (workspaces, sidebar, project_name) = tokio::task::spawn_blocking(move || {
             let db = db.lock().unwrap();
             // `missing` is only rendered by the sidebar (full pages) and by workspace
             // badges (project/All scopes). HTMX polls in workspace scope render neither,
             // so skip the filesystem checks there.
             let check_missing = !is_htmx || workspace_req.is_none();
             let workspaces = load_workspaces(&db, check_missing)?;
-            let project_exists = match project_req {
-                Some(id) => db.get_project(id)?.is_some(),
-                None => true,
+            let project_name = match project_req {
+                Some(id) => db.get_project(id)?.map(|p| Some(p.name)),
+                None => Some(None),
             };
+            let project_exists = project_name.is_some();
             let sidebar = if is_htmx || !project_exists {
                 None
             } else {
@@ -304,27 +372,35 @@ impl FromRequestParts<AppState> for Scope {
                     workspace_req,
                 )?))
             };
-            Ok::<_, String>((workspaces, sidebar, project_exists))
+            Ok::<_, String>((workspaces, sidebar, project_name))
         })
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(AppError::Internal)?;
 
         let by_id: HashMap<i64, WsInfo> = workspaces.iter().map(|w| (w.id, w.clone())).collect();
-        if !project_exists {
+        let Some(project_name) = project_name else {
             return Err(not_found("project"));
-        }
+        };
+        // Archived workspaces are not addressable as a scope (task detail by URL still works).
         let (filter, prefix) = match (project_req, workspace_req) {
             (Some(p), Some(w)) => {
                 match by_id.get(&w) {
-                    Some(info) if info.project_id == p => {}
+                    Some(info) if info.project_id == p && !info.archived => {}
                     _ => return Err(not_found("workspace")),
                 }
                 (ScopeFilter::Workspace(w), format!("/p/{p}/w/{w}"))
             }
-            (Some(p), None) => (ScopeFilter::Project(p), format!("/p/{p}")),
-            _ => (ScopeFilter::All, String::new()),
+            (Some(p), None) => (ScopeFilter::ProjectVisible(p), format!("/p/{p}")),
+            _ => (ScopeFilter::AllVisible, String::new()),
         };
+        let header = (!is_htmx).then(|| {
+            Arc::new(ScopeHeader {
+                project_name,
+                project_prefix: project_req.map(|p| format!("/p/{p}")),
+                workspace: workspace_req.and_then(|w| by_id.get(&w).cloned()),
+            })
+        });
         Ok(Scope {
             filter,
             prefix,
@@ -334,6 +410,7 @@ impl FromRequestParts<AppState> for Scope {
             workspaces: Arc::new(workspaces),
             by_id: Arc::new(by_id),
             sidebar,
+            header,
             params: Arc::new(params),
         })
     }

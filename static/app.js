@@ -16,8 +16,10 @@
   }
 
   function updateToggleButton(btn, currentTheme) {
-    // Use innerHTML so HTML entities (sun/moon characters) render correctly
-    btn.innerHTML = currentTheme === 'dark' ? '&#9728; Light mode' : '&#9790; Dark mode';
+    // The icons are switched by CSS (data-theme); the label names the action.
+    var label = currentTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
   }
 
   function initThemeToggle() {
@@ -32,39 +34,6 @@
       document.documentElement.setAttribute('data-theme', next);
       localStorage.setItem('theme', next);
       updateToggleButton(btn, next);
-      // Close the settings menu after toggling
-      var menu = document.getElementById('settings-menu');
-      var gear = document.getElementById('settings-gear');
-      if (menu) menu.setAttribute('hidden', '');
-      if (gear) gear.setAttribute('aria-expanded', 'false');
-    });
-  }
-
-  // --- Settings gear dropdown ---
-
-  function initSettingsDropdown() {
-    var gear = document.getElementById('settings-gear');
-    var menu = document.getElementById('settings-menu');
-    if (!gear || !menu) return;
-
-    gear.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var isOpen = !menu.hasAttribute('hidden');
-      if (isOpen) {
-        menu.setAttribute('hidden', '');
-        gear.setAttribute('aria-expanded', 'false');
-      } else {
-        menu.removeAttribute('hidden');
-        gear.setAttribute('aria-expanded', 'true');
-      }
-    });
-
-    // Close when clicking outside
-    document.addEventListener('click', function (e) {
-      if (!e.target.closest('#settings-dropdown')) {
-        menu.setAttribute('hidden', '');
-        gear.setAttribute('aria-expanded', 'false');
-      }
     });
   }
 
@@ -77,18 +46,8 @@
     return path.replace(SCOPE_PREFIX_RE, '') || '/';
   }
 
-  // Keep the sidebar's scope links on the view (tasks/board/epics) currently shown.
-  function updateSidebarLinks(path) {
-    var m = stripScope(path).match(/^\/(tasks|board|epics)(?:\/|$)/);
-    if (!m) return;
-    document.querySelectorAll('#scope-sidebar a[data-scope-prefix]').forEach(function (a) {
-      a.setAttribute('href', a.getAttribute('data-scope-prefix') + '/' + m[1]);
-    });
-  }
-
   function initNavActive() {
     var path = stripScope(window.location.pathname);
-    updateSidebarLinks(window.location.pathname);
     // Normalise trailing slash: /tasks/ -> /tasks
     if (path.length > 1 && path.endsWith('/')) {
       path = path.slice(0, -1);
@@ -111,10 +70,219 @@
     });
   }
 
+  // --- Scope drawer (below 900px the sidebar is hidden behind the "Scope" button) ---
+
+  function setScopeDrawer(open) {
+    var toggle = document.getElementById('scope-toggle');
+    var backdrop = document.getElementById('scope-backdrop');
+    document.body.classList.toggle('scope-open', open);
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (backdrop) backdrop.hidden = !open;
+  }
+
+  function initScopeDrawer() {
+    var toggle = document.getElementById('scope-toggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', function () {
+      setScopeDrawer(!document.body.classList.contains('scope-open'));
+    });
+    var backdrop = document.getElementById('scope-backdrop');
+    if (backdrop) backdrop.addEventListener('click', function () { setScopeDrawer(false); });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && document.body.classList.contains('scope-open')) {
+        setScopeDrawer(false);
+        toggle.focus();
+      }
+    });
+    // Leaving the narrow layout closes the drawer.
+    window.addEventListener('resize', function () {
+      if (window.innerWidth > 900) setScopeDrawer(false);
+    });
+  }
+
+  // --- Workspace actions: close all tasks / remove / restore ---
+
+  function postJson(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : '{}'
+    });
+  }
+
+  function wsEl(tag, text, cls) {
+    var el = document.createElement(tag);
+    if (text) el.textContent = text;
+    if (cls) el.className = cls;
+    return el;
+  }
+
+  // Fill and open the shared confirmation dialog. `spec`: title, body (array of nodes),
+  // confirm label, danger flag and an onConfirm() returning a promise.
+  function openWsDialog(spec) {
+    var dlg = document.getElementById('ws-dialog');
+    if (!dlg) return;
+    var title = document.getElementById('ws-dialog-title');
+    var body = document.getElementById('ws-dialog-body');
+    var confirm = document.getElementById('ws-dialog-confirm');
+    title.textContent = spec.title;
+    body.textContent = '';
+    spec.body.forEach(function (n) { body.appendChild(n); });
+    confirm.textContent = spec.confirm;
+    confirm.className = spec.danger ? 'ws-confirm-danger' : '';
+    confirm.disabled = false;
+    confirm.removeAttribute('aria-busy');
+    dlg._onConfirm = spec.onConfirm;
+    if (!dlg.open) dlg.showModal();
+    var first = body.querySelector('textarea');
+    (first || confirm).focus();
+  }
+
+  function closeWsDialog() {
+    var dlg = document.getElementById('ws-dialog');
+    if (dlg && dlg.open) dlg.close();
+  }
+
+  function wsFailed(msg) {
+    var confirm = document.getElementById('ws-dialog-confirm');
+    if (confirm) {
+      confirm.disabled = false;
+      confirm.removeAttribute('aria-busy');
+    }
+    showToast(msg, 'error');
+  }
+
+  function fetchWorkspace(id) {
+    return fetch('/api/workspaces/' + encodeURIComponent(id)).then(function (r) {
+      if (!r.ok) throw new Error('workspace lookup failed');
+      return r.json();
+    });
+  }
+
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+  function openCloseAllDialog(id, name) {
+    fetchWorkspace(id).then(function (ws) {
+      var n = ws.open_count;
+      var comment = wsEl('textarea');
+      comment.rows = 3;
+      comment.id = 'ws-close-comment';
+      comment.placeholder = 'Optional comment added to each closed task';
+      comment.setAttribute('aria-label', 'Comment (optional)');
+      var intro = n === 0
+        ? 'This workspace has no open tasks.'
+        : 'Each task is closed with reason "done". Tasks that are already done are not touched.';
+      openWsDialog({
+        title: 'Close ' + plural(n, 'open task', 'open tasks') + ' in ' + name + '?',
+        body: [wsEl('p', intro), comment],
+        confirm: n === 0 ? 'Nothing to close' : 'Close ' + plural(n, 'task', 'tasks'),
+        danger: false,
+        onConfirm: function () {
+          var text = comment.value.trim();
+          return postJson('/api/workspaces/' + encodeURIComponent(id) + '/close-all',
+            text ? { reason: 'done', comment: text } : { reason: 'done' })
+            .then(function (r) {
+              if (!r.ok) throw new Error('close failed');
+              return r.json();
+            })
+            .then(function (res) {
+              closeWsDialog();
+              showToast('Closed ' + plural(res.closed, 'task', 'tasks'), 'success');
+              setTimeout(function () { window.location.reload(); }, 600);
+            });
+        }
+      });
+      if (n === 0) document.getElementById('ws-dialog-confirm').disabled = true;
+    }).catch(function () { showToast('Could not load workspace', 'error'); });
+  }
+
+  function openRemoveDialog(id, name, next) {
+    fetchWorkspace(id).then(function (ws) {
+      var n = ws.open_count;
+      openWsDialog({
+        title: 'Remove workspace ' + name + '?',
+        body: [
+          wsEl('p', 'This hides the workspace and its ' + plural(n, 'open task', 'open tasks') +
+            ' (plus any done tasks) from the web UI: sidebar, boards, lists, epics and counts.'),
+          wsEl('p', 'Nothing is deleted. Tasks keep their status, comments and notes, and the files on disk are not touched.'),
+          wsEl('p', 'You can bring it back with "Restore" in the Archived group of the sidebar, or by running tk in that directory again.')
+        ],
+        confirm: 'Remove workspace',
+        danger: true,
+        onConfirm: function () {
+          return postJson('/api/workspaces/' + encodeURIComponent(id) + '/archive')
+            .then(function (r) {
+              if (!r.ok) throw new Error('archive failed');
+              closeWsDialog();
+              window.location.href = next || '/board';
+            });
+        }
+      });
+    }).catch(function () { showToast('Could not load workspace', 'error'); });
+  }
+
+  function initWorkspaceActions() {
+    var dlg = document.getElementById('ws-dialog');
+    if (dlg) {
+      dlg.addEventListener('click', function (e) {
+        if (e.target === dlg || e.target.closest('[data-ws-dialog-close]')) dlg.close();
+      });
+      document.getElementById('ws-dialog-confirm').addEventListener('click', function (e) {
+        var btn = e.currentTarget;
+        if (!dlg._onConfirm || btn.disabled) return;
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        Promise.resolve(dlg._onConfirm()).catch(function () { wsFailed('Action failed'); });
+      });
+    }
+
+    document.addEventListener('click', function (e) {
+      var menu = document.getElementById('ws-actions');
+      var action = e.target.closest('[data-ws-action]');
+      if (action) {
+        if (menu) menu.removeAttribute('open');
+        var id = action.getAttribute('data-ws-id');
+        var name = action.getAttribute('data-ws-name') || 'this workspace';
+        if (action.getAttribute('data-ws-action') === 'close-all') {
+          openCloseAllDialog(id, name);
+        } else {
+          openRemoveDialog(id, name, action.getAttribute('data-ws-next'));
+        }
+        return;
+      }
+      var restore = e.target.closest('[data-ws-restore]');
+      if (restore) {
+        restore.disabled = true;
+        postJson('/api/workspaces/' + encodeURIComponent(restore.getAttribute('data-ws-restore')) + '/restore')
+          .then(function (r) {
+            if (!r.ok) throw new Error('restore failed');
+            window.location.reload();
+          })
+          .catch(function () {
+            restore.disabled = false;
+            showToast('Could not restore workspace', 'error');
+          });
+        return;
+      }
+      // Close the actions menu when clicking elsewhere
+      if (menu && menu.open && !e.target.closest('#ws-actions')) menu.removeAttribute('open');
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var menu = document.getElementById('ws-actions');
+      if (e.key === 'Escape' && menu && menu.open) {
+        menu.removeAttribute('open');
+        var sum = menu.querySelector('summary');
+        if (sum) sum.focus();
+      }
+    });
+  }
+
   // Run after DOM is ready (script is deferred)
   document.addEventListener('DOMContentLoaded', function () {
     initThemeToggle();
-    initSettingsDropdown();
+    initScopeDrawer();
+    initWorkspaceActions();
     initNavActive();
   });
 
@@ -1824,6 +1992,10 @@
       }
       return;
     }
+
+    // Shortcuts stay quiet while the workspace confirmation dialog is open
+    var wsDlg = document.getElementById('ws-dialog');
+    if (wsDlg && wsDlg.open) return;
 
     // Help overlay: ? fires even in inputs so users can always discover shortcuts
     if (key === '?') {

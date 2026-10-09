@@ -218,6 +218,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tags", get(handlers::api_tags))
         .route("/api/epics", get(handlers::api_epics))
         .route("/api/workspaces", get(handlers::api_workspaces))
+        .route("/api/workspaces/{id}", get(handlers::api_get_workspace))
+        .route(
+            "/api/workspaces/{id}/archive",
+            post(handlers::api_archive_workspace),
+        )
+        .route(
+            "/api/workspaces/{id}/restore",
+            post(handlers::api_restore_workspace),
+        )
+        .route(
+            "/api/workspaces/{id}/close-all",
+            post(handlers::api_close_all_workspace_tasks),
+        )
         .route("/api/prime", get(handlers::api_prime))
         .route(
             "/api/tasks/{id}",

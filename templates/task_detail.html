@@ -4,6 +4,7 @@
 {% block title %}{{ task.id }} — Tacks{% endblock %}
 
 {% block content %}
+<div class="page-detail">
 <h1 data-editable data-field="title" data-task-id="{{ task.id }}">{{ task.title }}</h1>
 
 <div class="task-meta-row">
@@ -69,4 +70,5 @@
 {% include "partials/comments_section.html" %}
 
 <p><a href="{{ layout.prefix }}/tasks">Back to task list</a></p>
+</div>
 {% endblock %}

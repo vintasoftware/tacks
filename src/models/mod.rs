@@ -93,6 +93,9 @@ pub struct Workspace {
     pub path: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
+    /// When the workspace was archived (hidden from the web UI); `None` when active.
+    #[serde(default)]
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -13,7 +13,7 @@
       hx-select="#content-area"
       hx-swap="outerHTML"
       hx-push-url="true">
-  <div class="grid">
+  <div class="filter-bar">
     <div class="filter-multiselect" id="status-multiselect">
       <div class="filter-multiselect-trigger" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="Filter by status">
         <span class="filter-multiselect-pills"></span>
@@ -71,10 +71,10 @@
       </ul>
       <input type="hidden" name="tag" value="{{ tag_filter.as_deref().unwrap_or_default() }}" id="tag-hidden-input">
     </div>
-    <div role="search" style="position:relative">
+    <search class="filter-search">
       <label for="search-input" class="sr-only">Search tasks by title</label>
       <input type="text" id="search-input" name="search" placeholder="Search titles..." value="{{ search_filter.as_deref().unwrap_or_default() }}" aria-label="Search tasks by title" data-shortcut="/ to focus">
-    </div>
+    </search>
     <noscript><button type="submit">Filter</button></noscript>
   </div>
 </form>

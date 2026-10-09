@@ -39,6 +39,9 @@ pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
         if r.missing {
             path.push_str(" (missing)");
         }
+        if r.archived_at.is_some() {
+            path.push_str(" (archived)");
+        }
         println!(
             "{} {:<18} {:<22} {:>4} {:>4} {:>7} {:>4}  {}",
             if r.current { "*" } else { " " },
