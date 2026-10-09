@@ -84,12 +84,38 @@ pub fn check_request(
     Ok(())
 }
 
-/// Axum middleware applying [`check_request`] to every request.
+/// Hardening headers added to every response (including rejections).
+///
+/// CSP is limited to `frame-ancestors`: the templates and `static/app.js` rely on inline
+/// scripts, inline `style` attributes and htmx, so a `script-src`/`style-src` policy would
+/// need `'unsafe-inline'` and add no protection.
+const HARDENING_HEADERS: [(&str, &str); 4] = [
+    ("x-frame-options", "DENY"),
+    ("content-security-policy", "frame-ancestors 'none'"),
+    ("x-content-type-options", "nosniff"),
+    ("referrer-policy", "same-origin"),
+];
+
+/// Insert [`HARDENING_HEADERS`] into a response.
+fn add_hardening_headers(resp: &mut Response) {
+    let h = resp.headers_mut();
+    for (name, value) in HARDENING_HEADERS {
+        h.insert(
+            header::HeaderName::from_static(name),
+            header::HeaderValue::from_static(value),
+        );
+    }
+}
+
+/// Axum middleware applying [`check_request`] to every request and adding hardening headers
+/// to every response.
 pub async fn guard(req: Request, next: Next) -> Response {
-    match check_request(req.method(), req.headers()) {
+    let mut resp = match check_request(req.method(), req.headers()) {
         Ok(()) => next.run(req).await,
         Err(rejection) => rejection.into_response(),
-    }
+    };
+    add_hardening_headers(&mut resp);
+    resp
 }
 
 #[cfg(test)]
@@ -102,6 +128,17 @@ mod tests {
             h.insert(*k, v.parse().unwrap());
         }
         h
+    }
+
+    #[test]
+    fn test_hardening_headers_added() {
+        let mut resp = "ok".into_response();
+        add_hardening_headers(&mut resp);
+        let h = resp.headers();
+        assert_eq!(h["x-frame-options"], "DENY");
+        assert_eq!(h["content-security-policy"], "frame-ancestors 'none'");
+        assert_eq!(h["x-content-type-options"], "nosniff");
+        assert_eq!(h["referrer-policy"], "same-origin");
     }
 
     #[test]

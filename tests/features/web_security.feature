@@ -131,3 +131,36 @@ Feature: Web UI feedback and security guards
   Scenario: a GET with a localhost Host header succeeds
     When I GET "/api/tasks" with header "Host" set to "localhost:@port"
     Then the response status is 200
+
+  # ---------------------------------------------------------------------------
+  # Hardening headers
+  # ---------------------------------------------------------------------------
+
+  Scenario Outline: <kind> responses carry the hardening headers
+    When I GET "<path>" recording the response headers
+    Then the response status is <status>
+    And the response header "X-Frame-Options" contains "DENY"
+    And the response header "Content-Security-Policy" contains "frame-ancestors 'none'"
+    And the response header "X-Content-Type-Options" contains "nosniff"
+    And the response header "Referrer-Policy" contains "same-origin"
+
+    Examples:
+      | kind      | path            | status |
+      | HTML      | /board          | 200    |
+      | API       | /api/tasks      | 200    |
+      | static    | /static/app.css | 200    |
+      | not found | /api/tasks/nope | 404    |
+
+  Scenario: a rejected foreign Host response carries the hardening headers
+    When I GET "/api/tasks" with header "Host" set to "evil.example"
+    Then the response status is 403
+    And the response header "X-Frame-Options" contains "DENY"
+    And the response header "Content-Security-Policy" contains "frame-ancestors 'none'"
+    And the response header "X-Content-Type-Options" contains "nosniff"
+    And the response header "Referrer-Policy" contains "same-origin"
+
+  Scenario: a rejected cross-origin POST response carries the hardening headers
+    When I POST "/api/tasks" with body '{"title":"Evil"}' and header "Origin" set to "http://evil.example"
+    Then the response status is 403
+    And the response header "X-Frame-Options" contains "DENY"
+    And the response header "Content-Security-Policy" contains "frame-ancestors 'none'"

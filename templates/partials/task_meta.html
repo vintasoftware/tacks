@@ -19,7 +19,7 @@
   <dt>Workspace</dt>
   <dd class="task-workspace" data-task-id="{{ task.id }}">
     {% if let Some(w) = ws.as_ref() %}
-    <span class="ws-line"><span class="badge ws-badge{% if w.missing %} ws-missing{% endif %}">{{ w.name }}{% if w.missing %} · missing{% endif %}{% if w.archived %} · archived{% endif %}</span> <span class="ws-project">{{ w.project_name }}</span></span>
+    <span class="ws-line"><span class="badge ws-badge{% if w.missing %} ws-missing{% endif %}">{{ w.name }}{% if w.missing %} · missing{% endif %}{% if w.archived %} · archived{% endif %}</span> <span class="ws-project ws-project-label">in project {{ w.project_name }}</span></span>
     <span class="ws-path" title="{{ w.path }}">{{ w.path }}</span>
     {% if w.missing %}<span class="ws-missing-note">This workspace's path no longer exists. The task stays in its project; move it to another workspace if needed.</span>{% endif %}
     {% else %}

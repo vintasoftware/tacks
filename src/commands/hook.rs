@@ -31,7 +31,11 @@ pub enum HookEvent {
 /// Run the hook for `event`, reading its JSON payload from stdin.
 pub fn run(event: HookEvent) {
     let mut input = String::new();
-    if std::io::stdin().read_to_string(&mut input).is_err() {
+    if std::io::stdin()
+        .take(MAX_STDIN_BYTES)
+        .read_to_string(&mut input)
+        .is_err()
+    {
         return;
     }
     let out = match event {
@@ -43,6 +47,8 @@ pub fn run(event: HookEvent) {
     }
 }
 
+/// Upper bound on the hook payload read from stdin (1 MiB).
+const MAX_STDIN_BYTES: u64 = 1 << 20;
 /// Maximum size of the additionalContext string emitted by the PostToolUse hook.
 const MAX_CONTEXT_CHARS: usize = 8000;
 /// Maximum characters of one comment body in the hook message.
@@ -74,6 +80,14 @@ pub fn post_tool_use_in(input: &str, db_path: &Path, explicit: Option<&Path>) ->
     if !db_path.exists() {
         return None;
     }
+    // Cheap probe first: read-only, no pragmas, no migration, no git. When the probe
+    // cannot run at all (open error) fall through to the full path to stay safe; a query
+    // error (older schema without the columns) counts as "nothing pending".
+    if let Ok(ro) = Database::open_read_only(db_path)
+        && !ro.any_undelivered_pending_user_comment()
+    {
+        return None;
+    }
     let v: Value = serde_json::from_str(input).ok()?;
     let cwd = v.get("cwd").and_then(Value::as_str).map(PathBuf::from);
     let resolved = match (explicit, cwd) {
@@ -83,35 +97,31 @@ pub fn post_tool_use_in(input: &str, db_path: &Path, explicit: Option<&Path>) ->
     };
     let db = Database::open(db_path).ok()?;
     let ws = db.find_workspace_by_path(&resolved.workspace_path).ok()??;
-    let pending = db
-        .undelivered_pending_user_comments(&ScopeFilter::Workspace(ws.id))
-        .ok()?;
-    if pending.is_empty() {
-        return None;
-    }
 
     let mut text = String::from(
         "tacks: the user left feedback on tasks in this workspace. Treat each comment as an instruction for that task: address it, then reply with `tk comment <id> \"...\"` (tk close refuses while it is unanswered).\n",
     );
-    let mut shown: Vec<i64> = Vec::new();
-    for p in &pending {
-        let body = truncate_chars(&p.comment.body.replace('\n', " "), MAX_BODY_CHARS);
-        let line = format!("- {} ({}): \"{}\"\n", p.task_id, p.task_title, body);
-        // reserve room for the trailing "more" note
-        if text.chars().count() + line.chars().count() + 80 > MAX_CONTEXT_CHARS {
-            break;
-        }
-        text.push_str(&line);
-        shown.push(p.comment.id);
+    // Claim atomically, in order, only what fits; rows another process claimed are skipped.
+    let (claimed, more) = db
+        .claim_undelivered_pending_user_comments(&ScopeFilter::Workspace(ws.id), |p| {
+            let body = truncate_chars(&p.comment.body.replace('\n', " "), MAX_BODY_CHARS);
+            let line = format!("- {} ({}): \"{}\"\n", p.task_id, p.task_title, body);
+            // reserve room for the trailing "more" note
+            if text.chars().count() + line.chars().count() + 80 > MAX_CONTEXT_CHARS {
+                return false;
+            }
+            text.push_str(&line);
+            true
+        })
+        .ok()?;
+    if claimed.is_empty() {
+        return None;
     }
-    let more = pending.len() - shown.len();
     if more > 0 {
         text.push_str(&format!(
             "(+{more} more comment(s); they will be shown after your next tool call, or see `tk prime`)\n"
         ));
     }
-    // Only what was shown is marked delivered; the rest follows on the next tool call.
-    db.mark_comments_delivered(&shown).ok()?;
 
     Some(
         json!({"hookSpecificOutput": {
@@ -215,6 +225,7 @@ fn tokenize(s: &str) -> Vec<Tok> {
     toks
 }
 
+/// True for a shell `NAME=value` word.
 fn is_assignment(w: &str) -> bool {
     match w.split_once('=') {
         Some((name, _)) => {
@@ -226,10 +237,12 @@ fn is_assignment(w: &str) -> bool {
     }
 }
 
+/// True when the command word is `tk` (bare or with a path).
 fn is_tk(w: &str) -> bool {
     w == "tk" || w.ends_with("/tk")
 }
 
+/// The trigger name for a `TACKS_WORKSPACE=` / `TACKS_DB=` assignment word.
 fn env_trigger(w: &str) -> Option<&'static str> {
     if w.starts_with("TACKS_WORKSPACE=") {
         Some("TACKS_WORKSPACE")
@@ -240,6 +253,7 @@ fn env_trigger(w: &str) -> Option<&'static str> {
     }
 }
 
+/// Push `s` unless already present.
 fn add(out: &mut Vec<String>, s: String) {
     if !out.contains(&s) {
         out.push(s);
@@ -273,11 +287,103 @@ fn tk_flag_triggers(args: &[&str], out: &mut Vec<String>) {
     }
 }
 
+/// Maximum nesting of `sh -c '...'` strings that is scanned.
+const MAX_SHELL_DEPTH: usize = 5;
+
+/// Final path component of a command word (`/usr/bin/sudo` -> `sudo`).
+fn base(w: &str) -> &str {
+    w.rsplit('/').next().unwrap_or(w)
+}
+
+/// Skip option words starting at `i`: words beginning with `-` (a lone `-` is not an
+/// option), where the options listed in `with_arg` also consume the following word.
+/// `--` ends the options and is consumed. Returns the index of the first non-option word.
+fn skip_opts(words: &[&str], mut i: usize, with_arg: &[&str]) -> usize {
+    while let Some(&w) = words.get(i) {
+        if w == "--" {
+            return i + 1;
+        }
+        if !w.starts_with('-') || w == "-" {
+            break;
+        }
+        i += if with_arg.contains(&w) { 2 } else { 1 };
+    }
+    i.min(words.len())
+}
+
+/// If `words[i]` is a wrapper command (`env`, `sudo`, `time`, `nohup`, `nice`, `timeout`,
+/// `xargs`, `command`, `exec`), return the index just after the wrapper and its own
+/// arguments, where the wrapped command (or `NAME=value` pairs) starts.
+fn skip_wrapper(words: &[&str], i: usize) -> Option<usize> {
+    let rest = i + 1;
+    Some(match base(words[i]) {
+        "env" => skip_opts(words, rest, &["-u", "--unset", "-C", "--chdir", "-S"]),
+        "sudo" => skip_opts(
+            words,
+            rest,
+            &[
+                "-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t",
+            ],
+        ),
+        "time" | "nohup" | "command" | "exec" => skip_opts(words, rest, &["-f", "-o", "-a"]),
+        "nice" => skip_opts(words, rest, &["-n"]),
+        "timeout" => {
+            let j = skip_opts(words, rest, &["-s", "-k", "--signal", "--kill-after"]);
+            // the DURATION positional
+            (j + 1).min(words.len())
+        }
+        "xargs" => skip_opts(
+            words,
+            rest,
+            &["-n", "-I", "-L", "-P", "-s", "-d", "-E", "-a", "-l", "-i"],
+        ),
+        _ => return None,
+    })
+}
+
+/// For `sh|bash|zsh|dash|ksh [flags] -c '<cmd>'` (also clustered flags such as `-lc`),
+/// return the command string. Options before `-c` are skipped; a non-option word (a script
+/// path) means there is no `-c` string.
+fn shell_c_string<'a>(words: &[&'a str], i: usize) -> Option<&'a str> {
+    if !matches!(base(words[i]), "sh" | "bash" | "zsh" | "dash" | "ksh") {
+        return None;
+    }
+    let mut j = i + 1;
+    while let Some(&w) = words.get(j) {
+        if w == "-o" || w == "+o" || w == "-O" || w == "+O" {
+            j += 2;
+            continue;
+        }
+        if w.starts_with("--") || !(w.starts_with('-') || w.starts_with('+')) {
+            if w.starts_with("--") && w != "--" {
+                j += 1; // long option such as --norc
+                continue;
+            }
+            return None;
+        }
+        if w.starts_with('-') && w[1..].contains('c') {
+            return words.get(j + 1).copied();
+        }
+        j += 1;
+    }
+    None
+}
+
 /// Return the list of cross-workspace triggers found in a shell command
 /// (empty when the command stays within the current workspace).
+///
+/// Best effort: see the "Agent hook" section of `docs/workspace-scoping.md` for what is
+/// recognized (wrappers such as `sudo`/`env`/`xargs`, and `bash -c '...'` strings).
 pub fn cross_workspace_triggers(command: &str) -> Vec<String> {
-    let toks = tokenize(command);
     let mut out = Vec::new();
+    scan_command(command, 0, &[], &mut out);
+    out
+}
+
+/// Scan one command string (possibly the argument of `sh -c`) for triggers, adding them to
+/// `out`. `inherited` are env triggers set by a prefix of an enclosing `sh -c` command.
+fn scan_command(command: &str, depth: usize, inherited: &[&'static str], out: &mut Vec<String>) {
+    let toks = tokenize(command);
     for seg in toks.split(|t| *t == Tok::Sep) {
         let words: Vec<&str> = seg
             .iter()
@@ -290,24 +396,24 @@ pub fn cross_workspace_triggers(command: &str) -> Vec<String> {
             continue;
         }
         let mut i = 0;
-        let mut env_hits = Vec::new();
+        let mut env_hits: Vec<&'static str> = inherited.to_vec();
         // leading assignments and wrapper commands
         while let Some(&w) = words.get(i) {
             if is_assignment(w) {
                 if let Some(t) = env_trigger(w) {
                     env_hits.push(t);
                 }
-            } else if matches!(w, "env" | "command" | "exec") {
-                // wrapper: keep skipping (env may take assignments next)
+                i += 1;
+            } else if let Some(next) = skip_wrapper(&words, i) {
+                i = next;
             } else {
                 break;
             }
-            i += 1;
         }
-        if i == words.len() {
+        if i >= words.len() {
             // assignment-only segment: persists in the shell, so flag it too
             for t in env_hits {
-                add(&mut out, t.to_string());
+                add(out, t.to_string());
             }
             continue;
         }
@@ -319,17 +425,20 @@ pub fn cross_workspace_triggers(command: &str) -> Vec<String> {
                     "TACKS_DB" => Some("TACKS_DB"),
                     _ => None,
                 }) {
-                    add(&mut out, t.to_string());
+                    add(out, t.to_string());
                 }
             }
         } else if is_tk(w) {
             for t in env_hits {
-                add(&mut out, t.to_string());
+                add(out, t.to_string());
             }
-            tk_flag_triggers(&words[i + 1..], &mut out);
+            tk_flag_triggers(&words[i + 1..], out);
+        } else if depth < MAX_SHELL_DEPTH
+            && let Some(inner) = shell_c_string(&words, i)
+        {
+            scan_command(inner, depth + 1, &env_hits, out);
         }
     }
-    out
 }
 
 #[cfg(test)]
@@ -392,6 +501,58 @@ mod tests {
         assert_eq!(t("echo a\ntk list --scope all"), ["--scope all"]);
         assert_eq!(t("command tk list --scope all"), ["--scope all"]);
         assert_eq!(t("exec tk list --scope all"), ["--scope all"]);
+    }
+
+    #[test]
+    fn shell_c_strings() {
+        assert_eq!(t("bash -c 'tk list --scope all'"), ["--scope all"]);
+        assert_eq!(t(r#"sh -c "tk list --workspace /x""#), ["--workspace"]);
+        assert_eq!(t("zsh -c 'cd a && tk update X --move-to b'"), ["--move-to"]);
+        assert_eq!(t("bash -lc 'tk list --scope all'"), ["--scope all"]);
+        assert_eq!(t("bash --norc -c 'tk list --scope all'"), ["--scope all"]);
+        assert_eq!(t("/bin/bash -ec 'tk list --scope all'"), ["--scope all"]);
+        assert_eq!(
+            t("bash -c \"bash -c 'tk list --scope all'\""),
+            ["--scope all"]
+        );
+        assert_eq!(t("TACKS_DB=/x bash -c 'tk ready'"), ["TACKS_DB"]);
+        assert!(t("bash -c 'tk list'").is_empty());
+        assert!(t("bash script.sh tk --scope all").is_empty());
+        assert!(t("bash -c 'echo hi'").is_empty());
+    }
+
+    #[test]
+    fn wrapper_commands() {
+        assert_eq!(t("sudo tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("sudo -u bob -E tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("sudo -E TACKS_DB=/x tk ready"), ["TACKS_DB"]);
+        assert_eq!(t("time tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("nohup tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("nice tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("nice -n 5 tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("timeout 10 tk list --scope all"), ["--scope all"]);
+        assert_eq!(
+            t("timeout -s KILL 10s tk list --scope all"),
+            ["--scope all"]
+        );
+        assert_eq!(t("echo x | xargs tk list --scope all"), ["--scope all"]);
+        assert_eq!(
+            t("xargs -n 1 -I {} tk update {} --move-to b"),
+            ["--move-to"]
+        );
+        assert_eq!(t("env -i tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("env -u FOO tk list --scope all"), ["--scope all"]);
+        assert_eq!(t("env -- tk list --scope all"), ["--scope all"]);
+        assert_eq!(
+            t("env -i FOO=1 TACKS_WORKSPACE=/x tk ready"),
+            ["TACKS_WORKSPACE"]
+        );
+        assert_eq!(t("sudo env TACKS_DB=/x tk ready"), ["TACKS_DB"]);
+        assert!(t("sudo tk list").is_empty());
+        assert!(t("env -i FOO=1 tk ready").is_empty());
+        assert!(t("timeout 10 git status").is_empty());
+        assert!(t("sudo").is_empty());
+        assert!(t("timeout").is_empty());
     }
 
     #[test]
@@ -489,6 +650,25 @@ mod tests {
         assert!(post_tool_use_in(&input, &db, Some(&ws)).is_none());
         // garbage input is silent
         assert!(post_tool_use_in("garbage", &db, Some(&ws)).is_none());
+    }
+
+    #[test]
+    fn post_tool_use_old_schema_is_silent_and_untouched() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("old.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT);
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY, task_id TEXT, body TEXT);",
+            )
+            .unwrap();
+        }
+        let before = std::fs::read(&db).unwrap();
+        let input = json!({"cwd": tmp.path().to_string_lossy()}).to_string();
+        assert!(post_tool_use_in(&input, &db, Some(tmp.path())).is_none());
+        // read-only probe: no migration happened
+        assert_eq!(std::fs::read(&db).unwrap(), before);
     }
 
     #[test]

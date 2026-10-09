@@ -70,11 +70,14 @@ pub fn run(
         ));
     }
 
-    db.close_task(id, reason)?;
-
-    if let Some(body) = comment {
-        db.add_comment_by(id, body, Some("agent"))?;
-    }
+    // Status change and comment succeed or fail together.
+    db.with_savepoint(|| {
+        db.close_task(id, reason)?;
+        if let Some(body) = comment {
+            db.add_comment_by(id, body, Some("agent"))?;
+        }
+        Ok(())
+    })?;
 
     if json {
         let task = db

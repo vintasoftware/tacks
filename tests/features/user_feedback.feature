@@ -182,3 +182,32 @@ Feature: User feedback loop
     Given I run tk "comment @id(t) 'use the new API' --author user" in "A"
     When I run the post-tool-use hook in "A" with raw stdin "this is { not json"
     Then the hook prints nothing and exits 0
+
+  # ---------------------------------------------------------------------------
+  # Author validation and atomic close
+  # ---------------------------------------------------------------------------
+
+  Scenario: a blank author is rejected
+    When I run tk "comment @id(t) 'note' --author '  '" in "A"
+    Then the tk command fails with exit code 1
+    When I run tk "--json show @id(t)" in "A"
+    Then the JSON output path "comments" is an empty array
+
+  Scenario: an author longer than 64 characters is rejected
+    When I run tk "comment @id(t) 'note' --author aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in "A"
+    Then the tk command fails with exit code 1
+    When I run tk "--json show @id(t)" in "A"
+    Then the JSON output path "comments" is an empty array
+
+  Scenario: the author is trimmed before it is stored
+    Given I run tk "comment @id(t) 'note' --author ' alice '" in "A"
+    When I run tk "--json show @id(t)" in "A"
+    Then the JSON output path "comments.0.author" equals "alice"
+
+  Scenario: closing with a comment stores it as the agent and closes the task
+    When I run tk "close @id(t) -c 'all done'" in "A"
+    Then the tk command succeeds
+    When I run tk "--json show @id(t)" in "A"
+    Then the JSON output path "status" equals "done"
+    And the JSON output path "comments.0.body" equals "all done"
+    And the JSON output path "comments.0.author" equals "agent"

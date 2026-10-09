@@ -111,6 +111,21 @@ impl Database {
         Ok(db)
     }
 
+    /// Open an existing database read-only: no creation, no pragmas that write, no migration.
+    ///
+    /// Intended for cheap probes (the PostToolUse hook). The schema may be older than
+    /// current, so callers must tolerate missing columns.
+    pub fn open_read_only(path: &Path) -> Result<Self, String> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("failed to open database: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("failed to set busy timeout: {e}"))?;
+        Ok(Database { conn })
+    }
+
     /// Create the schema tables if they don't exist, then run any pending version-gated migrations.
     pub fn migrate(&self) -> Result<(), String> {
         // Fast path: schema already current (config table may not exist yet, which errors).
@@ -852,6 +867,7 @@ impl Database {
     fn pending_query(
         &self,
         scope: &ScopeFilter,
+        task_id: Option<&str>,
         extra: &str,
     ) -> Result<Vec<PendingComment>, String> {
         let mut sql = format!(
@@ -861,10 +877,14 @@ impl Database {
                AND NOT EXISTS (SELECT 1 FROM comments r WHERE r.task_id = c.task_id
                                AND r.id > c.id AND (r.author IS NULL OR r.author != 'user')){extra}"
         );
-        let mut bound: Vec<i64> = Vec::new();
+        let mut bound: Vec<rusqlite::types::Value> = Vec::new();
         if let Some((cond, value)) = scope.condition("t.workspace_id", 1) {
             sql.push_str(&format!(" AND {cond}"));
-            bound.extend(value);
+            bound.extend(value.into_iter().map(rusqlite::types::Value::Integer));
+        }
+        if let Some(id) = task_id {
+            bound.push(rusqlite::types::Value::Text(id.to_string()));
+            sql.push_str(&format!(" AND c.task_id = ?{}", bound.len()));
         }
         sql.push_str(" ORDER BY c.created_at ASC, c.id ASC");
 
@@ -894,7 +914,7 @@ impl Database {
         &self,
         scope: &ScopeFilter,
     ) -> Result<Vec<PendingComment>, String> {
-        self.pending_query(scope, "")
+        self.pending_query(scope, None, "")
     }
 
     /// Number of pending user comments per task id (tasks with none are absent).
@@ -912,9 +932,8 @@ impl Database {
     /// Pending user comments for one task (empty when the task is done or missing).
     pub fn task_pending_user_comments(&self, task_id: &str) -> Result<Vec<Comment>, String> {
         Ok(self
-            .pending_user_comments(&ScopeFilter::All)?
+            .pending_query(&ScopeFilter::All, Some(task_id), "")?
             .into_iter()
-            .filter(|p| p.task_id == task_id)
             .map(|p| p.comment)
             .collect())
     }
@@ -924,27 +943,83 @@ impl Database {
         &self,
         scope: &ScopeFilter,
     ) -> Result<Vec<PendingComment>, String> {
-        self.pending_query(scope, " AND c.delivered_at IS NULL")
+        self.pending_query(scope, None, " AND c.delivered_at IS NULL")
     }
 
-    /// Mark comments as delivered (sets `delivered_at` to now only where it is NULL), in one
-    /// transaction. Idempotent: already-delivered comments keep their original timestamp.
-    pub fn mark_comments_delivered(&self, ids: &[i64]) -> Result<(), String> {
-        if ids.is_empty() {
-            return Ok(());
+    /// Cheap probe: is there any pending user comment, anywhere, that was not delivered yet?
+    ///
+    /// One query, no scope resolution. Works on a read-only connection; an older schema
+    /// without the `author`/`delivered_at` columns yields `false` instead of an error.
+    pub fn any_undelivered_pending_user_comment(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM comments c JOIN tasks t ON t.id = c.task_id
+                 WHERE c.author = 'user' AND c.delivered_at IS NULL AND t.status != 'done'
+                   AND NOT EXISTS (SELECT 1 FROM comments r WHERE r.task_id = c.task_id
+                                   AND r.id > c.id AND (r.author IS NULL OR r.author != 'user'))
+                 LIMIT 1",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
+    /// Atomically claim undelivered pending user comments of `scope` for delivery.
+    ///
+    /// Inside one write transaction (`BEGIN IMMEDIATE` when not already in one) the
+    /// undelivered pending comments are listed oldest first; `take` is called for each in
+    /// order and claiming stops at the first `false` (so only what will be shown is claimed).
+    /// Each claimed row is marked delivered with `UPDATE ... WHERE delivered_at IS NULL`
+    /// and kept only when exactly one row changed, so concurrent callers never both get the
+    /// same comment. Returns the comments this call claimed and how many undelivered
+    /// pending comments remain unclaimed.
+    pub fn claim_undelivered_pending_user_comments(
+        &self,
+        scope: &ScopeFilter,
+        mut take: impl FnMut(&PendingComment) -> bool,
+    ) -> Result<(Vec<PendingComment>, usize), String> {
+        let own_tx = self.conn.is_autocommit();
+        if own_tx {
+            self.conn
+                .execute_batch("BEGIN IMMEDIATE")
+                .map_err(|e| format!("failed to begin transaction: {e}"))?;
         }
-        let now = Utc::now().to_rfc3339();
-        self.with_savepoint(|| {
-            for id in ids {
-                self.conn
+        let mut work = || -> Result<(Vec<PendingComment>, usize), String> {
+            let all = self.undelivered_pending_user_comments(scope)?;
+            let now = Utc::now().to_rfc3339();
+            let total = all.len();
+            let mut claimed = Vec::new();
+            for p in all {
+                if !take(&p) {
+                    break;
+                }
+                let changed = self
+                    .conn
                     .execute(
                         "UPDATE comments SET delivered_at = ?1 WHERE id = ?2 AND delivered_at IS NULL",
-                        params![now, id],
+                        params![now, p.comment.id],
                     )
-                    .map_err(|e| format!("failed to mark comment delivered: {e}"))?;
+                    .map_err(|e| format!("failed to claim comment: {e}"))?;
+                if changed == 1 {
+                    claimed.push(p);
+                }
             }
-            Ok(())
-        })
+            let remaining = total - claimed.len();
+            Ok((claimed, remaining))
+        };
+        let result = work();
+        if own_tx {
+            match &result {
+                Ok(_) => self
+                    .conn
+                    .execute_batch("COMMIT")
+                    .map_err(|e| format!("failed to commit: {e}"))?,
+                Err(_) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                }
+            }
+        }
+        result
     }
 
     // -- Stats --
@@ -2524,7 +2599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mark_comments_delivered_is_idempotent() {
+    fn test_claim_undelivered_is_idempotent() {
         let (db, _d) = open_test_db();
         let t = make_task(&db, "t");
         let c1 = db.add_comment_by(&t.id, "1", Some("user")).unwrap();
@@ -2532,31 +2607,118 @@ mod tests {
         let all = ScopeFilter::All;
         assert_eq!(db.undelivered_pending_user_comments(&all).unwrap().len(), 2);
 
-        db.mark_comments_delivered(&[c1.id]).unwrap();
+        let mut first = true;
+        let (claimed, remaining) = db
+            .claim_undelivered_pending_user_comments(&all, |_| std::mem::take(&mut first))
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].comment.id, c1.id);
+        assert_eq!(remaining, 1);
         let und = db.undelivered_pending_user_comments(&all).unwrap();
         assert_eq!(und.len(), 1);
         assert_eq!(und[0].comment.id, c2.id);
         // Still pending overall.
         assert_eq!(db.pending_user_comments(&all).unwrap().len(), 2);
 
-        let stamp = |id: i64| -> String {
-            db.conn
-                .query_row(
-                    "SELECT delivered_at FROM comments WHERE id = ?1",
-                    params![id],
-                    |r| r.get(0),
-                )
-                .unwrap()
-        };
-        let first = stamp(c1.id);
-        db.mark_comments_delivered(&[c1.id, c2.id]).unwrap();
-        assert_eq!(stamp(c1.id), first);
-        assert!(
-            db.undelivered_pending_user_comments(&all)
-                .unwrap()
-                .is_empty()
-        );
-        db.mark_comments_delivered(&[]).unwrap();
+        let (again, _) = db
+            .claim_undelivered_pending_user_comments(&all, |_| true)
+            .unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].comment.id, c2.id);
+        let (none, remaining) = db
+            .claim_undelivered_pending_user_comments(&all, |_| true)
+            .unwrap();
+        assert!(none.is_empty());
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn test_claim_undelivered_is_exclusive_and_budgeted() {
+        let (db, d) = open_test_db();
+        let t = make_task(&db, "t");
+        for i in 0..3 {
+            db.add_comment_by(&t.id, &format!("c{i}"), Some("user"))
+                .unwrap();
+        }
+        let all = ScopeFilter::All;
+        assert!(db.any_undelivered_pending_user_comment());
+        // budget: take only two
+        let mut n = 0;
+        let (got, rest) = db
+            .claim_undelivered_pending_user_comments(&all, |_| {
+                n += 1;
+                n <= 2
+            })
+            .unwrap();
+        assert_eq!((got.len(), rest), (2, 1));
+        // second claim gets only the remainder, third gets nothing
+        let (got, rest) = db
+            .claim_undelivered_pending_user_comments(&all, |_| true)
+            .unwrap();
+        assert_eq!((got.len(), rest), (1, 0));
+        let (got, _) = db
+            .claim_undelivered_pending_user_comments(&all, |_| true)
+            .unwrap();
+        assert!(got.is_empty());
+        assert!(!db.any_undelivered_pending_user_comment());
+        // still pending (shown by prime)
+        assert_eq!(db.pending_user_comments(&all).unwrap().len(), 3);
+        drop(d);
+    }
+
+    #[test]
+    fn test_claim_is_exclusive_across_threads() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("race.db");
+        {
+            let db = Database::open(&path).unwrap();
+            let t = make_task(&db, "t");
+            for i in 0..20 {
+                db.add_comment_by(&t.id, &format!("c{i}"), Some("user"))
+                    .unwrap();
+            }
+        }
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let db = Database::open(&path).unwrap();
+                    db.claim_undelivered_pending_user_comments(&ScopeFilter::All, |_| true)
+                        .unwrap()
+                        .0
+                        .into_iter()
+                        .map(|p| p.comment.id)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut ids: Vec<i64> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+        ids.sort();
+        let n = ids.len();
+        ids.dedup();
+        assert_eq!(n, 20);
+        assert_eq!(ids.len(), 20);
+    }
+
+    #[test]
+    fn test_read_only_probe_tolerates_old_schema() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("old.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT);
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY, task_id TEXT, body TEXT);",
+            )
+            .unwrap();
+        }
+        let ro = Database::open_read_only(&path).unwrap();
+        assert!(!ro.any_undelivered_pending_user_comment());
+        // read-only open must not create a missing database
+        assert!(Database::open_read_only(&dir.path().join("nope.db")).is_err());
     }
 
     #[test]

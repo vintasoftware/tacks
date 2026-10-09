@@ -18,6 +18,14 @@ Feature: Agent hook for cross-workspace commands
       | cd a && tk update X --move-to ../b    | --move-to       |
       | /usr/local/bin/tk list --workspace /x | --workspace     |
       | tk --db /z list                       | --db            |
+      | bash -c 'tk update X --scope all'     | --scope all     |
+      | sh -lc "tk ready --scope=project"     | --scope project |
+      | sudo -u me tk list --workspace /x     | --workspace     |
+      | timeout 30 tk list --scope all        | --scope all     |
+      | nohup tk list --db /x                 | --db            |
+      | env -i TACKS_DB=/x tk list            | TACKS_DB        |
+      | xargs tk list --scope all             | --scope all     |
+      | TACKS_DB=x bash -c 'tk ready'         | TACKS_DB        |
 
   Scenario Outline: commands that stay inside the workspace produce no output
     When I run the pre-tool-use hook for the Bash command <command>
@@ -30,6 +38,9 @@ Feature: Agent hook for cross-workspace commands
       | tk comment X "--scope all" |
       | git status                 |
       | echo tk --scope all        |
+      | bash -c 'tk list'          |
+      | bash script.sh --scope all |
+      | sudo ls                    |
 
   Scenario: non-Bash tools are ignored
     When I run the pre-tool-use hook with this stdin:

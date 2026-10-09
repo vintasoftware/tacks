@@ -383,6 +383,7 @@
   // --- Utilities ---
 
   function isTypingTarget(el) {
+    if (!el) return false;
     var tag = el.tagName;
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
   }
@@ -528,10 +529,14 @@
 
   var TASK_HASH_PREFIX = '#task-';
 
+  // Task ids look like <prefix>-<hash> with optional .N subtask suffixes; the prefix is configurable.
+  var TASK_ID_RE = /^[A-Za-z0-9_-]+-[A-Za-z0-9]+(\.[0-9]+)*$/;
+
   function getHashTaskId() {
     var hash = window.location.hash;
     if (hash && hash.startsWith(TASK_HASH_PREFIX)) {
-      return hash.slice(TASK_HASH_PREFIX.length);
+      var id = hash.slice(TASK_HASH_PREFIX.length);
+      return TASK_ID_RE.test(id) ? id : null;
     }
     return null;
   }
@@ -560,7 +565,7 @@
     // Fallback: look for a /tasks/<id> link inside the modal
     var link = dlg.querySelector('a[href^="/tasks/"]');
     if (link) {
-      var m = link.getAttribute('href').match(/^\/tasks\/(tk-[^/?#]+)/);
+      var m = link.getAttribute('href').match(/^\/tasks\/([^/?#]+)/);
       if (m) return m[1];
     }
     return null;
@@ -594,7 +599,7 @@
     var dlg = document.getElementById('task-modal');
     if (taskId) {
       if (dlg && !dlg.open) {
-        htmx.ajax('GET', '/tasks/' + taskId, { target: '#task-modal', swap: 'innerHTML' });
+        htmx.ajax('GET', '/tasks/' + encodeURIComponent(taskId), { target: '#task-modal', swap: 'innerHTML' });
       }
     } else {
       if (dlg && dlg.open) {
@@ -607,7 +612,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     var taskId = getHashTaskId();
     if (taskId) {
-      htmx.ajax('GET', '/tasks/' + taskId, { target: '#task-modal', swap: 'innerHTML' });
+      htmx.ajax('GET', '/tasks/' + encodeURIComponent(taskId), { target: '#task-modal', swap: 'innerHTML' });
     }
   });
 
@@ -617,7 +622,7 @@
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var card = e.target.closest && e.target.closest('.board-card[data-task-id]');
     if (!card || e.target.closest('a, button, input, select, textarea')) return;
-    htmx.ajax('GET', '/tasks/' + card.getAttribute('data-task-id'), { target: '#task-modal', swap: 'innerHTML' });
+    htmx.ajax('GET', '/tasks/' + encodeURIComponent(card.getAttribute('data-task-id')), { target: '#task-modal', swap: 'innerHTML' });
   });
 
   // Pause HTMX polling swaps while inline editing or dragging is active
@@ -784,9 +789,17 @@
         var pill = document.createElement('span');
         pill.className = 'filter-tag-pill';
         pill.setAttribute('data-tag', tag);
-        pill.innerHTML =
-          '<span class="filter-tag-pill-text">' + escapeHtml(tag) + '</span>' +
-          '<button class="filter-tag-pill-remove" type="button" aria-label="Remove ' + escapeHtml(tag) + ' filter" data-remove-tag="' + escapeHtml(tag) + '">&times;</button>';
+        var pillText = document.createElement('span');
+        pillText.className = 'filter-tag-pill-text';
+        pillText.textContent = tag;
+        var pillRemove = document.createElement('button');
+        pillRemove.className = 'filter-tag-pill-remove';
+        pillRemove.type = 'button';
+        pillRemove.setAttribute('aria-label', 'Remove ' + tag + ' filter');
+        pillRemove.setAttribute('data-remove-tag', tag);
+        pillRemove.textContent = '\u00d7';
+        pill.appendChild(pillText);
+        pill.appendChild(pillRemove);
         pillsContainer.appendChild(pill);
       });
       // Show/hide placeholder
@@ -815,12 +828,6 @@
           if (check) check.remove();
         }
       });
-    }
-
-    function escapeHtml(str) {
-      var d = document.createElement('div');
-      d.textContent = str;
-      return d.innerHTML;
     }
 
     function getTagOptions() {
@@ -1464,43 +1471,55 @@
   // Cleared when the fetch settles (success or failure).
   var patchInFlight = new WeakSet();
 
-  // Build a status badge HTML string for re-rendering after save
-  function statusBadgeHtml(status) {
+  // Build a status badge element for re-rendering after save (DOM APIs only, no HTML strings)
+  function statusBadgeEl(status) {
+    status = String(status);
     var icons = { open: '○', in_progress: '◐', done: '✓', blocked: '⊘' };
     var labels = { open: 'Open', in_progress: 'In Progress', done: 'Done', blocked: 'Blocked' };
     var icon = icons[status] || '';
     var label = labels[status] || status.replace('_', ' ');
-    return '<span class="badge status-' + status + '">' + icon + ' ' + label + '</span>';
+    var el = document.createElement('span');
+    el.className = 'badge status-' + status.replace(/[^a-z_]/g, '');
+    el.textContent = icon + ' ' + label;
+    return el;
   }
 
-  // Build a priority badge HTML string for re-rendering after save
-  function priorityBadgeHtml(priority) {
+  // Build a priority badge element for re-rendering after save
+  function priorityBadgeEl(priority) {
     var icons = { 0: '▲▲', 1: '▲', 2: '▬', 3: '▽', 4: '·' };
-    var icon = icons[priority] || '';
-    return '<span class="badge priority-' + priority + '">' + icon + ' P' + priority + '</span>';
+    var n = Number(priority);
+    var icon = icons[n] || '';
+    var el = document.createElement('span');
+    el.className = 'badge priority-' + (Number.isInteger(n) ? n : '');
+    el.textContent = icon + ' P' + n;
+    return el;
   }
 
-  // Build tag pill HTML for a single tag
-  function tagPillHtml(tag) {
-    return '<span class="tag-pill">' + tag + '</span>';
+  // Build a tag pill element for a single tag
+  function tagPillEl(tag) {
+    var el = document.createElement('span');
+    el.className = 'tag-pill';
+    el.textContent = tag;
+    return el;
   }
 
-  // Determine what HTML to show in the element after a successful save
-  function renderSavedValue(field, value) {
+  // Replace the content of `el` with the new value after a successful save
+  function renderSavedValue(el, field, value) {
+    el.textContent = '';
     if (field === 'status') {
-      return statusBadgeHtml(value);
-    }
-    if (field === 'priority') {
-      return priorityBadgeHtml(value);
-    }
-    if (field === 'tags') {
+      el.appendChild(statusBadgeEl(value));
+    } else if (field === 'priority') {
+      el.appendChild(priorityBadgeEl(value));
+    } else if (field === 'tags') {
       var tagList = Array.isArray(value) ? value : [value];
-      return tagList.map(tagPillHtml).join(' ');
+      tagList.forEach(function (t, i) {
+        if (i > 0) el.appendChild(document.createTextNode(' '));
+        el.appendChild(tagPillEl(t));
+      });
+    } else {
+      // Plain text fields
+      el.textContent = value;
     }
-    // For plain text fields: escape HTML entities
-    var div = document.createElement('div');
-    div.textContent = value;
-    return div.innerHTML;
   }
 
   // Finish editing: restore original content and remove editing class
@@ -1602,7 +1621,7 @@
     }
 
     patchInFlight.add(el);
-    fetch('/api/tasks/' + taskId, {
+    fetch('/api/tasks/' + encodeURIComponent(taskId), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1616,7 +1635,7 @@
         patchInFlight.delete(el);
         editingState.delete(el);
         el.classList.remove('editing');
-        el.innerHTML = renderSavedValue(field, payload[field]);
+        renderSavedValue(el, field, payload[field]);
       })
       .catch(function () {
         // Failed — revert to original, flash error, and show toast
@@ -1960,7 +1979,7 @@
     card.classList.add('drag-pending');
 
     // PATCH the API to persist the status change
-    fetch('/api/tasks/' + taskId, {
+    fetch('/api/tasks/' + encodeURIComponent(taskId), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: targetStatus }),
@@ -1987,37 +2006,42 @@
   document.addEventListener('keydown', function (e) {
     var key = e.key;
 
-    // Always allow Escape to close overlay or blur
+    // Escape is the only shortcut that works while typing. In a text field the first
+    // Escape just blurs the field (the draft is kept); with nothing focused it closes the
+    // topmost dialog. preventDefault stops the native <dialog> close on the first press.
     if (key === 'Escape') {
-      var taskModal = document.getElementById('task-modal');
-      if (taskModal && taskModal.open) {
-        taskModal.close();
+      var active = document.activeElement;
+      if (active && active !== document.body && isTypingTarget(active)) {
+        e.preventDefault();
+        active.blur();
         return;
       }
-      var dlg = document.getElementById('help-overlay');
-      if (dlg && dlg.open) {
-        dlg.close();
-        return;
+      var openDialogs = ['help-overlay', 'ws-dialog', 'task-modal'];
+      for (var i = 0; i < openDialogs.length; i++) {
+        var d = document.getElementById(openDialogs[i]);
+        if (d && d.open) {
+          e.preventDefault();
+          d.close();
+          return;
+        }
       }
-      if (document.activeElement && document.activeElement !== document.body) {
-        document.activeElement.blur();
-      }
+      if (active && active !== document.body) active.blur();
       return;
     }
+
+    // Every other shortcut stays quiet while typing in a form field
+    if (isTypingTarget(document.activeElement)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     // Shortcuts stay quiet while the workspace confirmation dialog is open
     var wsDlg = document.getElementById('ws-dialog');
     if (wsDlg && wsDlg.open) return;
 
-    // Help overlay: ? fires even in inputs so users can always discover shortcuts
+    // Help overlay
     if (key === '?') {
       toggleHelp();
       return;
     }
-
-    // Remaining shortcuts only fire outside of form fields
-    if (isTypingTarget(document.activeElement)) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     var path = currentPath();
 
@@ -2136,7 +2160,7 @@
     card.classList.add('drag-pending');
 
     // PATCH the API
-    fetch('/api/tasks/' + taskId, {
+    fetch('/api/tasks/' + encodeURIComponent(taskId), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: targetStatus }),

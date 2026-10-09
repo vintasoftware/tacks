@@ -49,6 +49,7 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 - The user can comment on tasks in the web UI. Those comments appear in `tk prime` ("User feedback awaiting reply"), in `tk show` (marked "awaiting reply"), and as hook notices during the session.
 - Treat them as instructions from the user for that task: address them, then reply with `tk comment <id> "..."`.
 - `tk close` refuses while a task has unanswered user comments. Use `--force` only if the user agreed.
+- Never use `--author user` (or impersonate the user in any way): that author is reserved for the human user, and your replies must use the default author.
 
 ## Conventions
 

@@ -10,7 +10,14 @@ Every comment has an optional `author` (`comments.author`, schema v4):
 - `agent`: the default for `tk comment` and for `tk close -c`.
 - `NULL`: comments created before v4. Treated as agent-authored.
 
-`--author` is free text; only `user` has meaning (user feedback).
+`--author` is free text; only `user` has meaning (user feedback). The CLI trims it and
+rejects an empty value or one longer than 64 characters (same rules as the web UI).
+
+Trust model: tacks is a local, single-user tool. The author is a label, not authentication;
+anything running as the same OS user (including an agent) can write `--author user` or
+answer feedback with a non-user comment, and the DB can be edited directly. The rules text
+(`tk init-rules`), the plugin agent and the `comment` command tell agents never to use
+`--author user`; that is a convention, not an enforced boundary.
 
 ## Pending ("awaiting reply")
 
@@ -25,8 +32,8 @@ An internal `comments.delivered_at` column records that a pending comment was al
 into an agent session, so the hook does not repeat it. It is not exposed in the CLI or JSON.
 
 - `tk prime` (SessionStart / PreCompact): prints "User feedback awaiting reply" at the top
-  (task id, title, body truncated to 300 chars, time) for the current scope, then marks
-  those comments delivered. `prime --json` adds `user_feedback: [{task_id, task_title,
+  (task id, title, body truncated to 300 chars, time) for the current scope, then claims
+  the undelivered ones (marks them delivered, see below). Prime still shows all pending ones. `prime --json` adds `user_feedback: [{task_id, task_title,
   comment_id, body, created_at}]` (always present, empty when none; body is not truncated).
   Prime's silent rules are unchanged.
 - `tk show <id>`: comments print as `[time] [author] body`, pending ones end with
@@ -35,12 +42,22 @@ into an agent session, so the hook does not repeat it. It is not exposed in the 
 - `tk hook post-tool-use` (plugin PostToolUse hook, matcher `*`, timeout 10): reads the hook
   JSON on stdin, resolves the workspace from `cwd` (`TACKS_WORKSPACE` wins; DB from
   `TACKS_DB` or `~/.tacks/tacks.db`), and when undelivered pending comments exist prints
-  `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}`, then
-  marks them delivered. The message stays under 8000 chars (bodies cut to 500 chars); if not
+  `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}`. The message stays under 8000 chars (bodies cut to 500 chars); if not
   everything fits, only the comments shown are marked delivered and the rest follow on the
   next tool call. If the database file is missing, the workspace is unregistered, or
-  anything fails, it prints nothing and exits 0; it never creates the database. Cost when
-  there is nothing to say: one `git rev-parse` plus two queries.
+  anything fails, it prints nothing and exits 0; it never creates the database. Stdin is
+  read up to 1 MiB.
+
+Claiming is atomic: `claim_undelivered_pending_user_comments` runs in one `BEGIN IMMEDIATE`
+transaction, lists the undelivered pending comments of the scope, and marks each one it
+will print with `UPDATE ... WHERE delivered_at IS NULL`, keeping only rows that changed. Parallel hook
+processes (parallel tool calls) and `tk prime` therefore never deliver the same comment
+twice via the hook; only what fits in the 8000-char budget is claimed.
+
+Cost when nothing is pending: the hook checks the DB file exists, opens it read-only (no
+WAL pragma, no migration, no git) and runs one query "any undelivered pending user comment?".
+Only when that says yes does it resolve the workspace via git and take the write lock. A
+database at an older schema (no `author`/`delivered_at` columns) simply yields "nothing".
 
 ## Close guard
 

@@ -421,20 +421,6 @@ dialog article h3 { font-size: 1rem; }
   padding-bottom: 0.5rem;
 }
 
-/* Board card header: title link + priority pill on one line */
-.board-card-header {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.board-card-header a {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: break-word;
-  word-break: break-word;
-}
-
 /* --- Top bar: brand | tabs | actions, full width --- */
 .topbar {
   position: sticky;
@@ -525,34 +511,6 @@ nav.nav-tabs a.nav-active {
   font-weight: 600;
 }
 
-/* Compact task/epic metadata row */
-.task-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.3em;
-  font-size: 0.875rem;
-  color: var(--pico-muted-color, #6b7280);
-  margin-bottom: 1rem;
-}
-
-.meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3em;
-  white-space: nowrap;
-}
-
-.meta-label {
-  font-weight: 500;
-  color: var(--pico-muted-color, #6b7280);
-}
-
-.meta-sep {
-  color: var(--pico-muted-border-color, #d1d5db);
-  user-select: none;
-}
-
 .task-description {
   margin-bottom: 1.25rem;
   color: var(--pico-color, inherit);
@@ -607,15 +565,6 @@ nav.nav-tabs a.nav-active {
   color: #fca5a5;
 }
 
-/* Container for the dep-blocked badge on board cards */
-.board-card-blocked {
-  margin-top: 0.3em;
-}
-
-[data-theme="dark"] .meta-sep {
-  color: var(--pico-muted-border-color, #374151);
-}
-
 /* Breadcrumb navigation — used on epic detail page */
 .breadcrumb {
   display: flex;
@@ -637,8 +586,9 @@ nav.nav-tabs a.nav-active {
 
 .breadcrumb li + li::before {
   content: '›';
-  color: var(--pico-muted-border-color, #d1d5db);
+  color: var(--pico-muted-color, #6b7280);
   font-size: 1em;
+  margin-right: 0.3em;
   user-select: none;
 }
 
@@ -654,10 +604,6 @@ nav.nav-tabs a.nav-active {
 .breadcrumb .breadcrumb-current {
   color: var(--pico-color, inherit);
   font-weight: 500;
-}
-
-[data-theme="dark"] .breadcrumb li + li::before {
-  color: var(--pico-muted-border-color, #374151);
 }
 
 [data-theme="dark"] .breadcrumb a {
@@ -751,7 +697,7 @@ a.view-toggle-btn:hover {
 
 /* --- Filter multi-select widget --- */
 
-/* Container: same look as .tag-autocomplete */
+/* Container */
 .filter-multiselect {
   position: relative;
   box-sizing: border-box;
@@ -1443,17 +1389,6 @@ nav.nav-tabs a:focus-visible,
   outline-color: var(--pico-primary, #a78bfa);
 }
 
-/* Board card inner links — suppress double ring when card already has focus */
-.board-card-header a:focus-visible {
-  outline: 2px solid var(--pico-primary, #7c3aed);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
-[data-theme="dark"] .board-card-header a:focus-visible {
-  outline-color: var(--pico-primary, #a78bfa);
-}
-
 /* Task list links (ID column, epic-badge) */
 td a:focus-visible,
 .epic-badge:focus-visible {
@@ -1611,32 +1546,6 @@ a.view-toggle-btn:focus-visible {
   .toast {
     max-width: 100%;
   }
-}
-
-/* Epic progress: three-part done/in-progress/open color coding */
-.progress-done {
-  color: #166534;
-  font-weight: 600;
-}
-.progress-wip {
-  color: #92400e;
-  font-weight: 600;
-}
-.progress-open {
-  color: var(--pico-muted-color);
-  font-weight: 600;
-}
-[data-theme="dark"] .progress-done {
-  color: #86efac;
-}
-[data-theme="dark"] .progress-wip {
-  color: #fde68a;
-}
-[data-theme="dark"] .progress-open {
-  color: var(--pico-muted-color);
-}
-.progress-total {
-  color: var(--pico-muted-color);
 }
 
 /* =====================================================================
@@ -2357,9 +2266,7 @@ main.view-epics {
   color: var(--pico-del-color, #b91c1c);
 }
 
-.board-card-ws {
-  margin-top: 0.3em;
-}
+.ws-project-label { color: var(--pico-muted-color, #6b7280); font-size: 0.875em; }
 
 .task-workspace {
   display: flex;
@@ -2473,8 +2380,6 @@ main.view-epics {
   border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
 }
 [data-theme="dark"] .pending-comments { color: #fcd34d; }
-.board-card-pending { margin-top: 0.35rem; }
-
 .comments-section { margin-top: 1.5rem; }
 .comment-list { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
 .comment-empty { color: var(--pico-muted-color); margin: 0; }
@@ -2628,7 +2533,12 @@ main.view-epics {
 .page-detail .breadcrumb { margin-top: 4px; margin-bottom: 8px; }
 
 /* Comment header: author, time and markers on one left-aligned row */
-.comment-head { justify-content: flex-start; }
+.comment-head,
+#task-modal article header.comment-head {
+  justify-content: flex-start;
+  padding: 0;
+  margin-bottom: 0.2rem;
+}
 
 /* Epic progress bar */
 .progress { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }

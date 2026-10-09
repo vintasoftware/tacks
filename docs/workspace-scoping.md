@@ -162,10 +162,18 @@ It asks when a `tk` invocation (at command position: start of command, after `;`
 - a `TACKS_WORKSPACE=` / `TACKS_DB=` assignment prefixing it, or `export TACKS_WORKSPACE` /
   `export TACKS_DB` anywhere in the command
 
+Wrappers are skipped together with their arguments before the command word:
+`sudo` (flags, `-u user` etc.), `time`, `nohup`, `nice` (`-n N`), `timeout` (flags, then
+DURATION), `xargs` (flags, then the command), `env` (flags such as `-i`, `-u NAME`, `--`,
+and `NAME=value` pairs; `TACKS_*` assignments still trigger), plus `command` and `exec`.
+`bash|sh|zsh|dash|ksh -c '<cmd>'` (also `-lc`, or `-c` after other flags) is scanned
+recursively, to a depth of 5.
+
 Quoted text is not scanned, so `tk comment X "use --scope all"` does not trigger.
 
 Caveats: the hook is a best-effort layer. It is a simple tokenizer, not a shell parser (it
-does not see through scripts, aliases, or variable expansion). In `auto` mode "ask" still
+does not see through scripts, aliases, variable expansion, `eval`, `find -exec`, `ssh`,
+here-documents, or wrapper flags it does not know). In `auto` mode "ask" still
 prompts; whether it is honored in `bypassPermissions` mode is unverified, so do not rely on it
 there. Without `tk` on PATH the hook silently does nothing. The write guard above (CLI
 refusing out-of-scope tasks) is the hard layer; the hook only adds a confirmation prompt.

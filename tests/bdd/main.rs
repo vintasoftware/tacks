@@ -30,6 +30,8 @@ pub struct TacksWorld {
     pub last_response_status: Option<u16>,
     /// Content-Type header of the most recent response.
     pub last_response_content_type: Option<String>,
+    /// Headers (lowercase name, value) of the response recorded by header-aware steps.
+    pub last_response_headers: Vec<(String, String)>,
     /// Body text of the most recent response.
     pub last_response_body: Option<String>,
     /// The ID of the most recently created task via inline-edit steps.
@@ -60,6 +62,7 @@ impl Default for TacksWorld {
             http_client: reqwest::Client::new(),
             last_response_status: None,
             last_response_content_type: None,
+            last_response_headers: Vec::new(),
             last_response_body: None,
             last_task_id: None,
             stored_created_at: None,

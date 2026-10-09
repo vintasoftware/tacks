@@ -50,6 +50,8 @@ During execution:
 - If you find a TODO that should be tracked, file it: `tk create "TODO: ..."`
 - Keep `tk update <id> --notes "..."` updated with your current working context — this helps if you need to hand off or resume
 
+Never pass `--author user` to `tk comment`: that author is reserved for the human user's feedback. Your own comments and replies use the default author (`agent`).
+
 ### 6. Verify
 
 Before closing, verify the work is actually complete:

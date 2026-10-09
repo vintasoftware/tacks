@@ -75,8 +75,7 @@ pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
     // The feedback is now in the agent's context: stop the hook from repeating it.
     // A failure here must not fail prime (worst case the hook repeats it once).
     if result.is_ok() {
-        let ids: Vec<i64> = feedback.iter().map(|p| p.comment.id).collect();
-        let _ = db.mark_comments_delivered(&ids);
+        let _ = db.claim_undelivered_pending_user_comments(&filter, |_| true);
     }
     result
 }
