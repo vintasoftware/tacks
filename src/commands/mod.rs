@@ -5,6 +5,7 @@ pub mod comment;
 pub mod create;
 pub mod dep;
 pub mod epic;
+pub mod hook;
 pub mod init;
 pub mod init_rules;
 pub mod list;

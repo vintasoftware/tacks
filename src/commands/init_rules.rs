@@ -28,7 +28,13 @@ tk workspaces
 
 All commands support `--json` for machine-readable output.
 
-Tasks are scoped automatically to the current git worktree (workspace) in one global database (`~/.tacks/tacks.db`). Widen list-type commands with `--scope project|all`, target another worktree with `--workspace <path>`, and move a task with `tk update <id> --move-to <path|none>`.
+Tasks are scoped automatically to the current git worktree (workspace) in one global database (`~/.tacks/tacks.db`). 
+## Workspace boundaries
+
+- Work only on tasks of your current workspace. Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks of other workspaces.
+- Never use `--scope project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace.
+- If a task you need belongs elsewhere, tell the user instead of acting on it.
+- Reading other workspaces' tasks with `tk show <id>` is fine.
 
 ## Workflow
 

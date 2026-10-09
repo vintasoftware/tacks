@@ -185,6 +185,7 @@ claude --plugin-dir ./claude-plugin
 - **Slash commands** for all `tk` operations: `/tacks:create`, `/tacks:list`, `/tacks:ready`, `/tacks:show`, `/tacks:update`, `/tacks:close`, `/tacks:dep`, `/tacks:comment`, `/tacks:children`, `/tacks:epic`, `/tacks:blocked`, `/tacks:stats`, `/tacks:prime`, `/tacks:init`, `/tacks:workspaces`
 - **SessionStart hook** that auto-loads backlog context via `tk prime` for the current workspace (silent in workspaces that have no tasks; install the rules file too, see [Set up your agents](#set-up-your-agents-claude-code))
 - **PreCompact hook** that re-runs `tk prime` before context compaction to preserve backlog state
+- **PreToolUse hook** that asks you to confirm any Bash `tk` command reaching outside the current workspace (`--scope project|all`, `--workspace`, `--move-to`, `--db`, `TACKS_WORKSPACE`/`TACKS_DB`); see [workspace scoping](docs/workspace-scoping.md#agent-hook)
 - **Task agent** (`@task-agent`) for autonomous work discovery: finds ready tasks, claims them, executes, files discoveries, and closes on completion
 
 ## Designed for agents
@@ -230,7 +231,7 @@ Tasks are scoped per git worktree ("workspace"); worktrees of the same repositor
 
 - `list`, `ready`, `blocked`, `epic`, `stats`, `prime` show the current workspace only. Use `--scope project` for every workspace of the repository, `--scope all` for everything. (`list -a` still means "include closed".)
 - `create` records the current workspace; subtasks inherit the parent's workspace.
-- ID-based commands (`show`, `update`, `close`, `comment`, `dep`, `children`) work on any task, whatever the scope.
+- Write guard: `update`, `close`, `comment`, `dep add|remove` and `create --parent` refuse (exit 1) tasks outside the current workspace, so agents stay in their lane. `--scope project|all` lifts the guard; use it only when asked. `show` and `children` read any task, and the web UI/API are unrestricted.
 - `tk update <id> --move-to <path|none>` moves a task and its subtasks to another workspace (or the unscoped bucket).
 - `tk prime` is silent when the current workspace has never used tacks.
 

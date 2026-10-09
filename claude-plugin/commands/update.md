@@ -63,5 +63,6 @@ tk update tk-c3d4.1 --parent none
 - `--claim` is the standard way to start working on a task: it sets `status=in_progress` and records the assignee.
 - `--notes` **overwrites** previous notes — it is mutable working context, not a log. Use `tk comment` to append to the activity log instead.
 - `--move-to` registers the target workspace if it is new; see `/tacks:workspaces` for listing workspaces.
+- `update` only works on tasks of the current workspace (for `--parent`, both tasks; for `--move-to`, the task being moved). A task elsewhere fails with an error naming its workspace. Do not rerun with `--scope project|all`, and do not use `--move-to`, `--workspace` or `TACKS_WORKSPACE`, unless the user explicitly asked for that task or workspace; otherwise tell the user.
 - Multiple flags can be combined in a single `tk update` call.
 - Use `--json` to parse the updated task back.

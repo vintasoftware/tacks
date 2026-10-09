@@ -77,9 +77,45 @@ Global flags (all optional):
 
 Scope filter applies to: `list`, `ready`, `prime`, `blocked`, `epic`, `stats`.
 
-ID-based commands (`show`, `update`, `close`, `comment`, `dep`, `children`) work
-on any task in the DB, whatever the scope. An agent in workspace B can claim a
-task from workspace A by ID.
+### Write guard
+
+Agents must stay inside their workspace unless told otherwise, so ID-based **write**
+commands refuse (exit 1, nothing written) a task outside the allowed scope. The allowed
+scope is the global `--scope` flag:
+
+- `workspace` (default): the task's `workspace_id` must equal the current registered
+  workspace. Without a resolvable workspace (non-git dir, no `--workspace`) the task must be
+  unscoped. If the current workspace is not registered, no existing task is in scope.
+- `project`: the task's workspace must belong to the current project (both unscoped when
+  not in a repo).
+- `all`: any task.
+
+`--workspace` / `TACKS_WORKSPACE` change what "current" means, as for list commands.
+
+Guarded commands: `update` (all fields, `--claim`, `--notes`), `close`, `comment`,
+`dep add` / `dep remove` (both tasks), `create --parent` (the parent). Specifics:
+
+- `update --parent E`: both the task and E must be in scope.
+- `update --move-to`: the task being moved must be in scope. You can push your own task
+  out of the workspace; pulling a foreign task in needs `--scope`.
+- The check is read-only and runs before any write (`ensure_in_scope` in `src/scope.rs`).
+  An unknown id is not a scope error; the command's usual "task not found" applies.
+
+Error example (stderr, exit 1):
+
+```
+error: tk-a1b2 belongs to workspace feat-login (project app), not the current workspace. do not act on it unless the user explicitly asked you to; if they did, rerun with --scope project
+```
+
+The hint says `--scope all` when the task is in another project or unscoped.
+
+Exceptions:
+
+- **Reads by ID stay unrestricted**: `show` and `children`. Reading is harmless and lets
+  an agent see what another workspace is doing (coordination).
+- **Web UI and JSON API are unrestricted**: they are the human operator's tools.
+
+Other commands:
 
 - `create`: sets `workspace_id` to the current workspace. A subtask
   (`--parent`) inherits the parent's workspace.
@@ -107,12 +143,39 @@ JSON: Task gets one new nullable field, `workspace_id`. `show --json` gets a
 `workspace` object (`id`, `name`, `path`, `project_id`, `project_name`,
 `missing`) or `null`. No existing field changes.
 
+### Agent hook
+
+The Claude Code plugin registers a `PreToolUse` hook (matcher `Bash`, command
+`tk hook pre-tool-use 2>/dev/null || true`, in `claude-plugin/.claude-plugin/plugin.json`).
+The hidden `tk hook pre-tool-use` command reads the hook JSON from stdin and, when a Bash
+command runs `tk` in a way that reaches outside the current workspace, answers with
+`permissionDecision: "ask"` so the user must confirm. Otherwise it prints nothing (no
+opinion). It does no database or git access and never fails (errors mean no output, exit 0).
+
+It asks when a `tk` invocation (at command position: start of command, after `;`, `&&`,
+`||`, `|`, `(`, `$(`, backtick, newline, or after `VAR=value`, `env`, `command`, `exec`) has:
+
+- `--scope project`, `--scope all` (or `--scope=...`); `--scope workspace` is fine
+- `--workspace` / `--workspace=`
+- `--move-to`
+- `--db` / `--db=`
+- a `TACKS_WORKSPACE=` / `TACKS_DB=` assignment prefixing it, or `export TACKS_WORKSPACE` /
+  `export TACKS_DB` anywhere in the command
+
+Quoted text is not scanned, so `tk comment X "use --scope all"` does not trigger.
+
+Caveats: the hook is a best-effort layer. It is a simple tokenizer, not a shell parser (it
+does not see through scripts, aliases, or variable expansion). In `auto` mode "ask" still
+prompts; whether it is honored in `bypassPermissions` mode is unverified, so do not rely on it
+there. Without `tk` on PATH the hook silently does nothing. The write guard above (CLI
+refusing out-of-scope tasks) is the hard layer; the hook only adds a confirmation prompt.
+
 ## Deleted workspaces
 
 No data changes. A workspace is "missing" when its path no longer exists
 (checked at read time; in the web UI only for requests that render it). Its tasks stay in the project. The CLI (`show`,
 `workspaces`) and the web UI mark them, and the user can move them to another
-workspace, or an agent elsewhere can claim them by ID.
+workspace, or an agent elsewhere can take them over with `--scope project|all` when the user asks.
 
 ## Web UI
 

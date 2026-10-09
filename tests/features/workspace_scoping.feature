@@ -130,7 +130,7 @@ Feature: Workspace scoping
 
   Scenario: a subtask inherits its parent's workspace even from another worktree
     Given I run tk "--json create 'Parent'" in "A" and save the id as "parent"
-    When I run tk "--json create 'Child' --parent @id(parent)" in "B" and save the id as "child"
+    When I run tk "--json --scope project create 'Child' --parent @id(parent)" in "B" and save the id as "child"
     Then the JSON output path "workspace_id" equals "@workspace(A)"
     When I run tk "--json list" in "B"
     Then the JSON output lists exactly the titles ""
@@ -142,9 +142,9 @@ Feature: Workspace scoping
     And the JSON output path "title" equals "Task in A"
     And the JSON output path "workspace.name" equals "A"
 
-  Scenario: an agent in another workspace can claim a task by ID
+  Scenario: an agent in another workspace can claim a task by ID with --scope project
     Given I run tk "--json create 'Task in A'" in "A" and save the id as "ta"
-    When I run tk "update @id(ta) --claim" in "B"
+    When I run tk "--scope project update @id(ta) --claim" in "B"
     Then the tk command succeeds
     When I run tk "--json show @id(ta)" in "B"
     Then the JSON output path "status" equals "in_progress"
@@ -180,7 +180,7 @@ Feature: Workspace scoping
     Given I run tk "--json create 'Epic in A'" in "A" and save the id as "epic"
     And I run tk "--json create 'Mover'" in "B" and save the id as "mover"
     And I run tk "--json create 'Mover child' --parent @id(mover)" in "B" and save the id as "mchild"
-    When I run tk "update @id(mover) --parent @id(epic)" in "B"
+    When I run tk "--scope project update @id(mover) --parent @id(epic)" in "B"
     Then the tk command succeeds
     And the task "mover" has workspace_id "@workspace(A)"
     And the task "mchild" has workspace_id "@workspace(A)"
@@ -192,7 +192,7 @@ Feature: Workspace scoping
   Scenario: promoting a subtask with --parent none keeps its workspace
     Given I run tk "--json create 'Parent'" in "A" and save the id as "parent"
     And I run tk "--json create 'Child' --parent @id(parent)" in "A" and save the id as "child"
-    When I run tk "update @id(child) --parent none" in "B"
+    When I run tk "--scope project update @id(child) --parent none" in "B"
     Then the tk command succeeds
     And the task "child" has workspace_id "@workspace(A)"
 
@@ -202,7 +202,7 @@ Feature: Workspace scoping
     And I run tk "--json create 'Epic in A'" in "A" and save the id as "epic"
     And I run tk "--json create 'Mover'" in "B" and save the id as "mover"
     And I run tk "--json create 'Mover child' --parent @id(mover)" in "B" and save the id as "mchild"
-    When I run tk "update @id(mover) --parent @id(epic) --move-to @path(C)" in "B"
+    When I run tk "--scope project update @id(mover) --parent @id(epic) --move-to @path(C)" in "B"
     Then the tk command succeeds
     And the task "mover" has workspace_id "@workspace(C)"
     And the task "mchild" has workspace_id "@workspace(C)"
@@ -281,7 +281,7 @@ Feature: Workspace scoping
   Scenario: tasks of a missing workspace can be claimed or moved from elsewhere
     Given I run tk "--json create 'Orphaned task'" in "B" and save the id as "orphan"
     And I remove the directory "B"
-    When I run tk "update @id(orphan) --move-to @path(A)" in "A"
+    When I run tk "--scope project update @id(orphan) --move-to @path(A)" in "A"
     Then the tk command succeeds
     And the task "orphan" has workspace_id "@workspace(A)"
     When I run tk "--json list" in "A"

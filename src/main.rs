@@ -179,6 +179,13 @@ enum Commands {
         #[arg(short, long, default_value_t = 3000)]
         port: u16,
     },
+    /// Claude Code hook entry point (used by the plugin; reads JSON on stdin)
+    #[command(hide = true)]
+    Hook {
+        /// Hook event name
+        #[arg(value_enum)]
+        event: commands::hook::HookEvent,
+    },
     /// Install Claude Code rules for working with tacks
     InitRules {
         /// Install to global ~/.claude/rules/ instead of project .claude/rules/
@@ -218,6 +225,12 @@ fn default_db_path() -> Result<PathBuf, String> {
 
 fn main() {
     let cli = Cli::parse();
+
+    // hooks need no database or scope and must never fail
+    if let Commands::Hook { event } = cli.command {
+        commands::hook::run(event);
+        return;
+    }
 
     let db_path = match cli.db {
         Some(p) => p,
@@ -296,6 +309,7 @@ fn main() {
             notes.as_deref(),
             parent.as_deref(),
             move_to.as_deref(),
+            &scope,
             cli.json,
         ),
         Commands::Close {
@@ -309,17 +323,25 @@ fn main() {
             comment.as_deref(),
             Some(&reason),
             force,
+            &scope,
             cli.json,
         ),
         Commands::Children { id } => commands::children::run(&db_path, &id, cli.json),
         Commands::Epic => commands::epic::run(&db_path, &scope, cli.json),
         Commands::Dep { action } => match action {
-            DepAction::Add { child, parent } => commands::dep::add(&db_path, &child, &parent),
-            DepAction::Remove { child, parent } => commands::dep::remove(&db_path, &child, &parent),
+            DepAction::Add { child, parent } => {
+                commands::dep::add(&db_path, &child, &parent, &scope)
+            }
+            DepAction::Remove { child, parent } => {
+                commands::dep::remove(&db_path, &child, &parent, &scope)
+            }
         },
-        Commands::Comment { id, body } => commands::comment::run(&db_path, &id, &body, cli.json),
+        Commands::Comment { id, body } => {
+            commands::comment::run(&db_path, &id, &body, &scope, cli.json)
+        }
         Commands::Blocked => commands::blocked::run(&db_path, &scope, cli.json),
         Commands::Workspaces => commands::workspaces::run(&db_path, &scope, cli.json),
+        Commands::Hook { .. } => return,
         Commands::InitRules { global } => {
             if let Err(e) = commands::init_rules::run(global) {
                 eprintln!("error: {e}");

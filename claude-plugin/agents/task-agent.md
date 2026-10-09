@@ -91,7 +91,7 @@ Then explain clearly to the user what is needed to unblock it.
 
 **Don't close an epic with open subtasks.** Check `tk children <id> --json` before closing a parent task. Use `--force` only if the open subtasks are intentionally deferred.
 
-**Stay in your workspace.** Do not move tasks between workspaces (`tk update <id> --move-to <path>`) unless the user asks; `tk workspaces` lists the available ones.
+**Stay in your workspace.** Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks outside the current workspace. Never use `--scope project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace. If a task you need belongs elsewhere, tell the user instead of acting on it. Reading it with `tk show` is fine. `tk workspaces` lists the available workspaces.
 
 **Use `--json` for all tk commands.** Structured output is unambiguous and parse-safe. Human-readable output is for display only.
 

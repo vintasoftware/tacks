@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::db::Database;
 use crate::models::validate_close_reason;
+use crate::scope::{self, Scope};
 
 /// Close a task, optionally recording a comment and close reason.
 pub fn run(
@@ -10,9 +11,11 @@ pub fn run(
     comment: Option<&str>,
     reason: Option<&str>,
     force: bool,
+    scope: &Scope,
     json: bool,
 ) -> Result<(), String> {
     let db = Database::open(db_path)?;
+    scope::ensure_id_in_scope(&db, id, scope)?;
 
     // Validate reason before touching the DB.
     if let Some(r) = reason {

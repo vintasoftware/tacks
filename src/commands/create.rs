@@ -24,6 +24,7 @@ pub fn run(
         let parent_task = db
             .get_task(parent_id)?
             .ok_or_else(|| format!("parent task not found: {parent_id}"))?;
+        scope::ensure_in_scope(&db, &parent_task, scope)?;
         (db.generate_child_id(parent_id)?, parent_task.workspace_id)
     } else {
         // Register the current workspace on first write; unscoped outside a git repo

@@ -34,6 +34,7 @@ src/
     epic.rs         # tk epic (show epic progress)
     blocked.rs      # tk blocked (tasks blocked by open deps)
     workspaces.rs   # tk workspaces (projects/workspaces with counts)
+    hook.rs         # tk hook pre-tool-use (hidden; plugin hook asking to confirm cross-workspace tk commands)
 tests/
   features/         # Gherkin .feature files (BDD specs + agent-readable docs)
     task_lifecycle.feature    dependencies.feature
@@ -43,6 +44,7 @@ tests/
     children.feature          epic_status.feature
     blocked.feature           parent_filter.feature
     workspace_scoping.feature web_workspaces.feature
+    workspace_guard.feature   agent_hook.feature
     (plus web/API features: serve, web_api, web_views, ...)
   bdd/
     main.rs         # cucumber-rs harness (World struct, runner)
@@ -64,7 +66,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 - **Cycle detection**: Write-time BFS guard on `dep add` rejects circular dependencies
 - **No external dependencies**: SQLite is bundled (no system sqlite needed)
 - **Global DB**: default path is `~/.tacks/tacks.db`; `--db` / `TACKS_DB` override it
-- **Workspace scoping**: tasks are scoped per git worktree; see `docs/workspace-scoping.md` (`src/scope.rs` resolves scope)
+- **Workspace scoping**: tasks are scoped per git worktree; ID-based writes (update, close, comment, dep, create --parent) are guarded by `--scope` (reads like show/children are not); see `docs/workspace-scoping.md` (`src/scope.rs` resolves scope)
 - **BDD-driven**: Feature files are both executable tests and agent-readable behavioral documentation
 - **`--json` is global**: Declared on top-level Cli struct, accessed via `cli.json`
 
@@ -73,7 +75,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (285 scenarios, 2338 steps)
+cargo test --test bdd    # Run BDD scenarios (339 scenarios, 2946 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```

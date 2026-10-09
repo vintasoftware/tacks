@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use clap::ValueEnum;
 
 use crate::db::{Database, ScopeFilter};
-use crate::models::Workspace;
+use crate::models::{Task, Workspace};
 
 /// How wide list-type commands look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -85,6 +85,86 @@ impl Scope {
             }
             ScopeMode::All => Ok(ScopeFilter::All),
         }
+    }
+}
+
+/// Guard for ID-based write commands: refuse a task outside the allowed scope.
+///
+/// Read-only (lookups only), so callers run it before any write. A missing task
+/// passes here; the command's own "task not found" error then applies.
+///
+/// - `--scope all`: always allowed.
+/// - `workspace`: the task's workspace must be the current registered workspace
+///   (no resolvable workspace: the task must be unscoped).
+/// - `project`: the task's workspace must belong to the current project (no
+///   resolvable workspace: the task must be unscoped).
+pub fn ensure_in_scope(db: &Database, task: &Task, scope: &Scope) -> Result<(), String> {
+    if scope.mode == ScopeMode::All {
+        return Ok(());
+    }
+    let current = scope.resolve()?;
+    let task_ws = match task.workspace_id {
+        Some(id) => db.get_workspace(id)?,
+        None => None,
+    };
+    let task_project = match &task_ws {
+        Some(w) => db.get_project(w.project_id)?,
+        None => None,
+    };
+    let allowed = match (&current, task.workspace_id) {
+        (None, None) => true,
+        (None, Some(_)) | (Some(_), None) => false,
+        (Some(r), Some(wid)) => match scope.mode {
+            ScopeMode::Workspace => db
+                .find_workspace_by_path(&r.workspace_path)?
+                .is_some_and(|w| w.id == wid),
+            _ => task_project
+                .as_ref()
+                .is_some_and(|p| p.path == r.project_path),
+        },
+    };
+    if allowed {
+        return Ok(());
+    }
+    let same_project = match (&current, &task_project) {
+        (Some(r), Some(p)) => p.path == r.project_path,
+        _ => false,
+    };
+    let hint = if same_project && scope.mode == ScopeMode::Workspace {
+        "--scope project"
+    } else {
+        "--scope all"
+    };
+    let place = match task.workspace_id {
+        None => "is unscoped (no workspace, no project)".to_string(),
+        Some(wid) => {
+            let ws = task_ws
+                .as_ref()
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| format!("#{wid}"));
+            let pr = task_project
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("belongs to workspace {ws} (project {pr})")
+        }
+    };
+    let what = if scope.mode == ScopeMode::Project {
+        "current project"
+    } else {
+        "current workspace"
+    };
+    Err(format!(
+        "{} {place}, not the {what}. do not act on it unless the user explicitly asked you to; if they did, rerun with {hint}",
+        task.id
+    ))
+}
+
+/// [`ensure_in_scope`] by task id; an unknown id passes (the caller reports it).
+pub fn ensure_id_in_scope(db: &Database, id: &str, scope: &Scope) -> Result<(), String> {
+    match db.get_task(id)? {
+        Some(t) => ensure_in_scope(db, &t, scope),
+        None => Ok(()),
     }
 }
 

@@ -17,7 +17,7 @@ const COMMAND_REFERENCE: &[&str] = &[
     "tk comment <id> <body>",
     "tk stats [--oneline] [--json]",
     "tk workspaces [--json]",
-    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen",
+    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen (reads only; do not use it for writes unless the user asked)",
 ];
 
 /// Run the `tk prime` command.

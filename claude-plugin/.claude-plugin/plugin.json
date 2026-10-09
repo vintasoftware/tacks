@@ -1,7 +1,7 @@
 {
   "name": "tacks",
   "description": "Lightweight task manager for AI coding agents. Manage tasks, track epics, and maintain backlog context with simple CLI commands.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": {
     "name": "Stephen McCray",
     "url": "https://github.com/srmccray"
@@ -12,6 +12,7 @@
   "keywords": ["task-management", "ai-workflow", "agent-memory", "backlog"],
   "hooks": {
     "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "tk prime"}]}],
-    "PreCompact": [{"matcher": "", "hooks": [{"type": "command", "command": "tk prime"}]}]
+    "PreCompact": [{"matcher": "", "hooks": [{"type": "command", "command": "tk prime"}]}],
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "tk hook pre-tool-use 2>/dev/null || true", "timeout": 10}]}]
   }
 }

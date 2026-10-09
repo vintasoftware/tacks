@@ -18,9 +18,18 @@ pub fn run(
     notes: Option<&str>,
     parent: Option<&str>,
     move_to: Option<&str>,
+    scope: &scope::Scope,
     json: bool,
 ) -> Result<(), String> {
     let db = Database::open(db_path)?;
+
+    // Write guard: the task (and a new parent) must be in scope, checked before any write.
+    scope::ensure_id_in_scope(&db, id, scope)?;
+    if let Some(p) = parent
+        && !p.eq_ignore_ascii_case("none")
+    {
+        scope::ensure_id_in_scope(&db, p, scope)?;
+    }
 
     // Handle claim: set status to in_progress and assignee
     let effective_status = if claim { Some("in_progress") } else { status };
