@@ -46,6 +46,7 @@ tests/
     workspace_scoping.feature web_workspaces.feature
     web_workspace_actions.feature
     workspace_guard.feature   agent_hook.feature
+    workspace_auto_archive.feature
     (plus web/API features: serve, web_api, web_views, web_security, user_feedback, ...)
   bdd/
     main.rs         # cucumber-rs harness (World struct, runner)
@@ -77,7 +78,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (440 scenarios, 4012 steps)
+cargo test --test bdd    # Run BDD scenarios (454 scenarios, 4170 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```

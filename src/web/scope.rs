@@ -356,6 +356,9 @@ impl FromRequestParts<AppState> for Scope {
             // badges (project/All scopes). HTMX polls in workspace scope render neither,
             // so skip the filesystem checks there.
             let check_missing = !is_htmx || workspace_req.is_none();
+            if check_missing {
+                db.auto_archive_removed_workspaces(|p| !FsPath::new(p).exists())?;
+            }
             let workspaces = load_workspaces(&db, check_missing)?;
             let project_name = match project_req {
                 Some(id) => db.get_project(id)?.map(|p| Some(p.name)),

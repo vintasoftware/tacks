@@ -637,3 +637,37 @@ async fn task_has_workspace_id(world: &mut TacksWorld, alias: String, expected: 
     let json: Value = serde_json::from_slice(&out.stdout).expect("show output is JSON");
     assert_eq!(render(&json["workspace_id"]), expected, "show: {json}");
 }
+
+// ---------------------------------------------------------------------------
+// Archived assertions (auto-archive)
+// ---------------------------------------------------------------------------
+
+fn assert_row_archived(rows: &[Value], path: &str) {
+    let row = rows
+        .iter()
+        .find(|r| r["path"].as_str() == Some(path))
+        .unwrap_or_else(|| panic!("no workspace row with path {path} in {rows:?}"));
+    assert!(
+        row["archived_at"].as_str().is_some_and(|s| !s.is_empty()),
+        "expected archived_at to be set, row: {row}"
+    );
+}
+
+/// The `tk workspaces --json` row for a directory has `archived_at` set.
+#[then(expr = "the workspaces JSON row for {string} is archived")]
+async fn workspaces_row_is_archived(world: &mut TacksWorld, alias: String) {
+    let path = dir_of(world, &alias).to_string_lossy().into_owned();
+    let rows = workspace_rows(world);
+    assert_row_archived(&rows, &path);
+}
+
+/// The `GET /api/workspaces` row for a directory has `archived_at` set.
+#[then(expr = "the workspaces response row for {string} is archived")]
+async fn workspaces_response_row_is_archived(world: &mut TacksWorld, alias: String) {
+    let path = dir_of(world, &alias).to_string_lossy().into_owned();
+    let body = last_body(world);
+    let json: Value =
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("not JSON ({e}): {body}"));
+    let rows = json.as_array().expect("array").clone();
+    assert_row_archived(&rows, &path);
+}

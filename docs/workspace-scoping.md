@@ -184,6 +184,7 @@ No data changes. A workspace is "missing" when its path no longer exists
 (checked at read time; in the web UI only for requests that render it). Its tasks stay in the project. The CLI (`show`,
 `workspaces`) and the web UI mark them, and the user can move them to another
 workspace, or an agent elsewhere can take them over with `--scope project|all` when the user asks.
+A missing workspace whose tasks are all done (or that has none) is archived automatically on a web page load or `tk workspaces`, unless the user restored it before (`workspaces.restored_at`).
 
 ## Web UI
 

@@ -9,7 +9,7 @@ use crate::models::{
 };
 
 /// Latest schema version known to this build.
-const LATEST_SCHEMA_VERSION: i32 = 5;
+const LATEST_SCHEMA_VERSION: i32 = 6;
 
 /// Which tasks a list-type query should cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1165,7 +1165,7 @@ impl Database {
     /// Look up a workspace by its canonical path.
     pub fn find_workspace_by_path(&self, path: &str) -> Result<Option<Workspace>, String> {
         self.query_optional(
-            "SELECT id, project_id, path, name, created_at, archived_at FROM workspaces WHERE path = ?1",
+            "SELECT id, project_id, path, name, created_at, archived_at, restored_at FROM workspaces WHERE path = ?1",
             params![path],
             row_to_workspace,
         )
@@ -1174,7 +1174,7 @@ impl Database {
     /// Look up a workspace by id.
     pub fn get_workspace(&self, id: i64) -> Result<Option<Workspace>, String> {
         self.query_optional(
-            "SELECT id, project_id, path, name, created_at, archived_at FROM workspaces WHERE id = ?1",
+            "SELECT id, project_id, path, name, created_at, archived_at, restored_at FROM workspaces WHERE id = ?1",
             params![id],
             row_to_workspace,
         )
@@ -1227,7 +1227,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.archived_at
+                "SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.archived_at, w.restored_at
                  FROM workspaces w JOIN projects p ON p.id = w.project_id
                  ORDER BY p.name, p.id, w.name, w.id",
             )
@@ -1318,18 +1318,64 @@ impl Database {
             .ok_or_else(|| format!("workspace not found: {id}"))
     }
 
-    /// Restore an archived workspace (clears `archived_at`). Idempotent.
+    /// Restore an archived workspace (clears `archived_at` and sets `restored_at` so
+    /// auto-archive skips it). Only changes anything when it was archived; idempotent.
     pub fn restore_workspace(&self, id: i64) -> Result<Workspace, String> {
         self.get_workspace(id)?
             .ok_or_else(|| format!("workspace not found: {id}"))?;
         self.conn
             .execute(
-                "UPDATE workspaces SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL",
-                params![id],
+                "UPDATE workspaces SET archived_at = NULL, restored_at = ?1\n                 WHERE id = ?2 AND archived_at IS NOT NULL",
+                params![Utc::now().to_rfc3339(), id],
             )
             .map_err(|e| format!("failed to restore workspace: {e}"))?;
         self.get_workspace(id)?
             .ok_or_else(|| format!("workspace not found: {id}"))
+    }
+
+    /// Archive every active, never-restored workspace whose tasks are all `done` (or that
+    /// has no tasks) and whose path `is_missing` reports as gone. Sets `archived_at` like
+    /// [`Database::archive_workspace`]; tasks are never modified. Returns the archived ids.
+    pub fn auto_archive_removed_workspaces(
+        &self,
+        is_missing: impl Fn(&str) -> bool,
+    ) -> Result<Vec<i64>, String> {
+        let candidates: Vec<(i64, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT w.id, w.path FROM workspaces w
+                     WHERE w.archived_at IS NULL AND w.restored_at IS NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM tasks t
+                           WHERE t.workspace_id = w.id AND t.status != 'done')
+                     ORDER BY w.id",
+                )
+                .map_err(|e| format!("failed to query workspaces: {e}"))?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| format!("failed to query workspaces: {e}"))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("failed to read workspaces: {e}"))?
+        };
+        let now = Utc::now().to_rfc3339();
+        let mut archived = Vec::new();
+        for (id, path) in candidates {
+            if !is_missing(&path) {
+                continue;
+            }
+            let n = self
+                .conn
+                .execute(
+                    "UPDATE workspaces SET archived_at = ?1
+                     WHERE id = ?2 AND archived_at IS NULL AND restored_at IS NULL",
+                    params![now, id],
+                )
+                .map_err(|e| format!("failed to archive workspace: {e}"))?;
+            if n > 0 {
+                archived.push(id);
+            }
+        }
+        Ok(archived)
     }
 
     /// Number of tasks in the workspace that are not done (what
@@ -1711,6 +1757,14 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
         )?;
     }
 
+    if version < 6 {
+        apply_migration(
+            conn,
+            6,
+            "ALTER TABLE workspaces ADD COLUMN restored_at TEXT;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1780,6 +1834,7 @@ fn row_to_workspace(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         name: row.get(3)?,
         created_at: parse_ts(&row.get::<_, String>(4)?),
         archived_at: row.get::<_, Option<String>>(5)?.map(|t| parse_ts(&t)),
+        restored_at: row.get::<_, Option<String>>(6)?.map(|t| parse_ts(&t)),
     })
 }
 
@@ -2755,6 +2810,159 @@ mod tests {
         assert_eq!(get_schema_version(&db.conn).unwrap(), LATEST_SCHEMA_VERSION);
         let ws = db.get_workspace(1).unwrap().expect("workspace kept");
         assert!(ws.archived_at.is_none());
+    }
+
+    #[test]
+    fn test_migration_from_v5_adds_restored_at() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("v5.db");
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL);
+                 CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     project_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                     name TEXT NOT NULL, created_at TEXT NOT NULL, archived_at TEXT);
+                 CREATE TABLE tasks (
+                     id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+                     status TEXT NOT NULL DEFAULT 'open', priority INTEGER NOT NULL DEFAULT 2,
+                     assignee TEXT, parent_id TEXT, tags TEXT NOT NULL DEFAULT '',
+                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                     close_reason TEXT, notes TEXT, workspace_id INTEGER);
+                 CREATE TABLE dependencies (child_id TEXT NOT NULL, parent_id TEXT NOT NULL,
+                     PRIMARY KEY (child_id, parent_id));
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
+                     author TEXT, delivered_at TEXT);
+                 INSERT INTO config VALUES ('schema_version', '5');
+                 INSERT INTO projects VALUES (1, '/r', 'r', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO workspaces VALUES (1, 1, '/r/w', 'w', '2024-01-01T00:00:00+00:00', NULL);",
+            )
+            .expect("seed v5");
+        }
+        let db = Database::open(&path).expect("open migrates");
+        assert_eq!(get_schema_version(&db.conn).unwrap(), LATEST_SCHEMA_VERSION);
+        let ws = db.get_workspace(1).unwrap().expect("workspace kept");
+        assert!(ws.restored_at.is_none());
+    }
+
+    fn set_status(db: &Database, id: &str, status: &str) {
+        db.conn
+            .execute(
+                "UPDATE tasks SET status = ?1 WHERE id = ?2",
+                params![status, id],
+            )
+            .expect("set status");
+    }
+
+    #[test]
+    fn test_auto_archive_missing_all_done() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let t = task_in(&db, "a", Some(w1.id));
+        set_status(&db, &t.id, "done");
+        let before = db.get_task(&t.id).unwrap().unwrap();
+        let ids = db
+            .auto_archive_removed_workspaces(|p| p == w1.path)
+            .unwrap();
+        assert_eq!(ids, vec![w1.id]);
+        assert!(
+            db.get_workspace(w1.id)
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .is_some()
+        );
+        let after = db.get_task(&t.id).unwrap().unwrap();
+        assert_eq!(after.updated_at, before.updated_at);
+    }
+
+    #[test]
+    fn test_auto_archive_skips_workspace_with_unfinished_tasks() {
+        for status in ["open", "in_progress", "blocked"] {
+            let (db, _d) = open_test_db();
+            let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+            let a = task_in(&db, "a", Some(w1.id));
+            let b = task_in(&db, "b", Some(w1.id));
+            set_status(&db, &a.id, "done");
+            set_status(&db, &b.id, status);
+            let ids = db.auto_archive_removed_workspaces(|_| true).unwrap();
+            assert!(!ids.contains(&w1.id), "status {status}");
+            assert!(
+                db.get_workspace(w1.id)
+                    .unwrap()
+                    .unwrap()
+                    .archived_at
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn test_auto_archive_skips_present_workspace() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let ids = db.auto_archive_removed_workspaces(|_| false).unwrap();
+        assert!(ids.is_empty());
+        assert!(
+            db.get_workspace(w1.id)
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_auto_archive_keeps_existing_archived_timestamp() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let stamp = db.archive_workspace(w1.id).unwrap().archived_at;
+        let ids = db.auto_archive_removed_workspaces(|_| true).unwrap();
+        assert!(!ids.contains(&w1.id));
+        assert_eq!(db.get_workspace(w1.id).unwrap().unwrap().archived_at, stamp);
+    }
+
+    #[test]
+    fn test_auto_archive_skips_restored_workspace() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        db.archive_workspace(w1.id).unwrap();
+        let restored = db.restore_workspace(w1.id).unwrap();
+        assert!(restored.restored_at.is_some());
+        let stamp = restored.restored_at;
+        // idempotent restore keeps the original restored_at
+        assert_eq!(db.restore_workspace(w1.id).unwrap().restored_at, stamp);
+        let ids = db.auto_archive_removed_workspaces(|_| true).unwrap();
+        assert!(!ids.contains(&w1.id));
+        assert!(
+            db.get_workspace(w1.id)
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_auto_archive_zero_tasks_and_returns_ids() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, w2, w3) = setup_scopes(&db);
+        let t = task_in(&db, "a", Some(w2.id));
+        set_status(&db, &t.id, "open");
+        let ids = db
+            .auto_archive_removed_workspaces(|p| p == w1.path || p == w2.path)
+            .unwrap();
+        assert_eq!(ids, vec![w1.id]);
+        assert!(
+            db.get_workspace(w3.id)
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
     }
 
     #[test]

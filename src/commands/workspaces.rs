@@ -17,6 +17,7 @@ pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
             None
         }
     };
+    db.auto_archive_removed_workspaces(|p| !Path::new(p).exists())?;
     let rows = workspace_rows(&db, current)?;
 
     if json {

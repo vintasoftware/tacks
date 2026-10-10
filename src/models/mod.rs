@@ -96,6 +96,9 @@ pub struct Workspace {
     /// When the workspace was archived (hidden from the web UI); `None` when active.
     #[serde(default)]
     pub archived_at: Option<DateTime<Utc>>,
+    /// Set when a user restored the workspace from the archive; auto-archive skips it.
+    #[serde(default)]
+    pub restored_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -125,6 +125,11 @@ menu on the workspace row in the sidebar):
   "Restore" action. Restoring brings the workspace and all its tasks back
   exactly as they were (same status, assignee, notes, comments), because
   archiving never changed them.
+- **Auto-archive**: when a workspace's path no longer exists and all its tasks
+  are done (or it has none), it is archived automatically on a web page load
+  or `tk workspaces`. Same soft archive, tasks unchanged. A workspace the user
+  restored is never auto-archived again (nullable `workspaces.restored_at`,
+  set by restore).
 - API: `POST /api/workspaces/{id}/archive` and `POST /api/workspaces/{id}/restore`
   (idempotent). DB: nullable `workspaces.archived_at`.
 

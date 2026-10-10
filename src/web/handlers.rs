@@ -852,6 +852,7 @@ pub async fn api_workspaces(State(state): State<AppState>) -> Result<impl IntoRe
     let db = state.db.clone();
     let rows = tokio::task::spawn_blocking(move || {
         let db = db.lock().unwrap();
+        db.auto_archive_removed_workspaces(|p| !std::path::Path::new(p).exists())?;
         crate::workspace_overview::workspace_rows(&db, None)
     })
     .await
