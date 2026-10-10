@@ -1,12 +1,15 @@
-<article>
+<article data-task-detail data-task-id="{{ task.id }}">
   <header>
-    <h3 data-editable data-field="title" data-task-id="{{ task.id }}">{{ task.title }}</h3>
+    <h3 class="task-title">{{ task.title }}</h3>
+    <h3 class="task-edit-label">Edit {{ task.id }}</h3>
     <div class="modal-header-actions">
+      {% if editable %}<button type="button" class="task-edit-btn" data-task-edit aria-label="Edit task" title="Edit (e)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span>Edit</span></button>{% endif %}
       <a class="modal-open-full" href="/tasks/{{ task.id }}" aria-label="Open in full page" title="Open in full page"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
-      <button aria-label="Close" rel="prev" onclick="document.getElementById('task-modal').close()"></button>
+      <button aria-label="Close" rel="prev"></button>
     </div>
   </header>
 
+  {% if editable %}{% include "partials/task_edit_form.html" %}{% endif %}
   {% include "partials/task_meta.html" %}
   {% include "partials/task_body.html" %}
 </article>

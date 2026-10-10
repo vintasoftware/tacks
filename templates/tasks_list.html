@@ -118,7 +118,11 @@
              hx-select="unset"
              hx-swap="innerHTML">{{ row.task.id }}</a></td>
       <td class="col-title">
-        <span data-editable data-field="title" data-task-id="{{ row.task.id }}">{{ row.task.title }}</span>
+        <a class="row-title-link" href="/tasks/{{ row.task.id }}"
+           hx-get="/tasks/{{ row.task.id }}"
+           hx-target="#task-modal"
+           hx-select="unset"
+           hx-swap="innerHTML">{{ row.task.title }}</a>
         {% if row.blocked_count > 0 || row.pending_count > 0 || row.children_total > 0 || row.parent_id.is_some() %}
         <div class="row-chips">
           {% if let (Some(pid), Some(ptitle)) = (row.parent_id.as_deref(), row.parent_title.as_deref()) %}
@@ -132,11 +136,11 @@
         </div>
         {% endif %}
       </td>
-      <td data-editable data-field="status" data-task-id="{{ row.task.id }}">{% call m::status_badge(row.task.status) %}</td>
-      <td data-editable data-field="priority" data-task-id="{{ row.task.id }}">{% call m::priority_badge(row.task.priority) %}</td>
+      <td>{% call m::status_badge(row.task.status) %}</td>
+      <td>{% call m::priority_badge(row.task.priority) %}</td>
       {% if show_ws %}<td class="col-ws">{% if let Some(ws) = row.workspace.as_ref() %}{% call m::ws_badge(ws) %}{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}
       <td class="col-assignee">{% if let Some(a) = row.task.assignee.as_deref() %}{{ a }}{% else %}<span class="muted">—</span>{% endif %}</td>
-      <td data-editable data-field="tags" data-task-id="{{ row.task.id }}">{% for tag in &row.task.tags %}<span class="tag-pill">{{ tag }}</span> {% endfor %}</td>
+      <td>{% for tag in &row.task.tags %}<span class="tag-pill">{{ tag }}</span> {% endfor %}</td>
       <td class="col-updated"><time datetime="{{ row.task.updated_at.to_rfc3339() }}" title="{{ row.updated_abs }}">{{ row.updated_rel }}</time></td>
     </tr>
     {% endfor %}

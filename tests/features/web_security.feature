@@ -87,9 +87,11 @@ Feature: Web UI feedback and security guards
     Given I created a task via API with title "Evil" and description "<payload>" as "evil"
     When I GET the HTML task "evil"
     Then the response status is 200
-    And the response body does not contain "alert(1)"
-    And the response body does not contain "onerror"
-    And the response body does not contain "javascript:"
+    # The raw text appears HTML-escaped in the edit form textarea; no live markup may remain.
+    And the response body does not contain "script>alert"
+    And the response body does not contain "<img src=x"
+    And the response body does not contain "onerror=alert(1)>"
+    And the response body does not contain 'href="javascript:'
 
     Examples:
       | payload                      |

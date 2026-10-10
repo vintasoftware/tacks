@@ -1,0 +1,42 @@
+{# Edit form for task detail (page and modal). Hidden until the Edit button (or `e`) opens it; app.js toggles it. Needs: task. #}
+<form class="task-edit-form" data-task-id="{{ task.id }}" hidden novalidate>
+  <label class="edit-field edit-field-title">
+    <span class="edit-label">Title</span>
+    <input type="text" name="title" value="{{ task.title }}" autocomplete="off">
+  </label>
+  <div class="edit-row">
+    <label class="edit-field">
+      <span class="edit-label">Status</span>
+      <select name="status">
+        <option value="open"{% if task.status == crate::models::Status::Open %} selected{% endif %}>○ Open</option>
+        <option value="in_progress"{% if task.status == crate::models::Status::InProgress %} selected{% endif %}>◐ In Progress</option>
+        <option value="done"{% if task.status == crate::models::Status::Done %} selected{% endif %}>✓ Done</option>
+        <option value="blocked"{% if task.status == crate::models::Status::Blocked %} selected{% endif %}>⊘ Blocked</option>
+      </select>
+    </label>
+    <label class="edit-field">
+      <span class="edit-label">Priority</span>
+      <select name="priority">
+        <option value="0"{% if task.priority == 0 %} selected{% endif %}>▲▲ P0</option>
+        <option value="1"{% if task.priority == 1 %} selected{% endif %}>▲ P1</option>
+        <option value="2"{% if task.priority == 2 %} selected{% endif %}>▬ P2</option>
+        <option value="3"{% if task.priority == 3 %} selected{% endif %}>▽ P3</option>
+        <option value="4"{% if task.priority == 4 %} selected{% endif %}>· P4</option>
+      </select>
+    </label>
+    <label class="edit-field edit-field-tags">
+      <span class="edit-label">Tags <span class="muted">(comma-separated)</span></span>
+      <input type="text" name="tags" value="{{ task.tags.join(", ") }}" autocomplete="off">
+    </label>
+  </div>
+  <label class="edit-field">
+    <span class="edit-label">Description <span class="muted">Markdown</span></span>
+    <textarea name="description" rows="10">
+{{ task.description.as_deref().unwrap_or_default() }}</textarea>
+  </label>
+  <div class="edit-actions">
+    <button type="submit" class="edit-save">Save</button>
+    <button type="button" class="edit-cancel secondary outline">Cancel</button>
+    <span class="edit-hint muted">Ctrl/Cmd+Enter to save</span>
+  </div>
+</form>

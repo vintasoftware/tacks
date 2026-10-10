@@ -864,208 +864,6 @@ a.view-toggle-btn:hover {
   color: #d1d5db;
 }
 
-/* --- Inline editing --- */
-
-/* Element in edit mode */
-[data-editable].editing {
-  outline: 2px solid var(--pico-primary, #7c3aed);
-  outline-offset: 2px;
-  border-radius: var(--pico-border-radius, 0.25rem);
-  background-color: color-mix(in srgb, var(--pico-primary, #7c3aed) 5%, transparent);
-  padding: 0.1em 0.25em;
-  margin: -0.1em -0.25em;
-  transition: outline 0.1s, background-color 0.1s;
-}
-
-/* Hint cursor on editable elements */
-[data-editable]:not(.editing) {
-  cursor: pointer;
-}
-
-/* Prevent pencil icon from wrapping on short-content cells (badges) */
-td[data-editable]:not(.editing) {
-  white-space: nowrap;
-}
-
-[data-editable]:not(.editing):hover {
-  text-decoration: underline dotted var(--pico-muted-color, #6b7280);
-}
-
-/* Pencil icon affordance — appears on hover to indicate the field is editable */
-[data-editable]:not(.editing)::after {
-  content: '';
-  display: none;
-}
-
-[data-editable]:not(.editing):hover::after {
-  content: ' \270E'; /* ✎ pencil */
-  display: inline;
-  font-size: 0.75em;
-  opacity: 0.65;
-  margin-left: 0.2em;
-  vertical-align: middle;
-  font-style: normal;
-  text-decoration: none;
-}
-
-/* Editable cell wrapper: flex row so input + buttons stay on one line */
-.inline-edit-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 0.25em;
-  width: 100%;
-  min-width: 0;
-}
-
-/* Inputs created by inline edit inherit surrounding typography */
-.inline-edit-input {
-  font-size: inherit;
-  font-family: inherit;
-  font-weight: inherit;
-  line-height: inherit;
-  color: inherit;
-  border: none;
-  border-bottom: 2px solid var(--pico-primary, #7c3aed);
-  background: transparent;
-  outline: none;
-  padding: 0;
-  margin: 0;
-  /* Shrink to fit remaining space beside the action buttons */
-  flex: 1;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.inline-edit-input:focus {
-  outline: none;
-}
-
-/* Save/cancel action buttons shown during inline edit */
-.inline-edit-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15em;
-  flex-shrink: 0;
-}
-
-.inline-edit-btn {
-  all: unset;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4em;
-  height: 1.4em;
-  border-radius: 50%;
-  font-size: 0.75em;
-  line-height: 1;
-  cursor: pointer;
-  transition: background-color 0.1s, color 0.1s;
-}
-
-.inline-edit-btn-save {
-  color: #15803d;
-  background-color: color-mix(in srgb, #22c55e 15%, transparent);
-}
-
-.inline-edit-btn-save:hover {
-  background-color: color-mix(in srgb, #22c55e 30%, transparent);
-}
-
-.inline-edit-btn-cancel {
-  color: #b91c1c;
-  background-color: color-mix(in srgb, #ef4444 10%, transparent);
-}
-
-.inline-edit-btn-cancel:hover {
-  background-color: color-mix(in srgb, #ef4444 25%, transparent);
-}
-
-[data-theme="dark"] .inline-edit-btn-save {
-  color: #4ade80;
-  background-color: color-mix(in srgb, #22c55e 20%, transparent);
-}
-
-[data-theme="dark"] .inline-edit-btn-save:hover {
-  background-color: color-mix(in srgb, #22c55e 35%, transparent);
-}
-
-[data-theme="dark"] .inline-edit-btn-cancel {
-  color: #f87171;
-  background-color: color-mix(in srgb, #ef4444 15%, transparent);
-}
-
-[data-theme="dark"] .inline-edit-btn-cancel:hover {
-  background-color: color-mix(in srgb, #ef4444 30%, transparent);
-}
-
-/* Select inputs in edit mode */
-.inline-edit-select {
-  font-size: inherit;
-  font-family: inherit;
-  font-weight: inherit;
-  line-height: inherit;
-  border: none;
-  border-bottom: 2px solid var(--pico-primary, #7c3aed);
-  background: var(--pico-form-element-background-color, #fff);
-  color: inherit;
-  outline: none;
-  padding: 0.1em 0.25em;
-  margin: 0;
-  box-sizing: border-box;
-  cursor: pointer;
-}
-
-[data-theme="dark"] .inline-edit-select {
-  background: var(--pico-form-element-background-color, #1e1e2e);
-}
-
-/* Textarea for description editing */
-.inline-edit-textarea {
-  font-size: inherit;
-  font-family: inherit;
-  font-weight: inherit;
-  line-height: inherit;
-  color: inherit;
-  border: 1px solid var(--pico-primary, #7c3aed);
-  border-radius: var(--pico-border-radius, 0.25rem);
-  background: var(--pico-form-element-background-color, #fff);
-  outline: none;
-  padding: 0.4em 0.5em;
-  margin: 0;
-  width: 100%;
-  min-height: 5em;
-  resize: vertical;
-  box-sizing: border-box;
-}
-
-[data-theme="dark"] .inline-edit-textarea {
-  background: var(--pico-form-element-background-color, #1e1e2e);
-}
-
-/* Error flash — briefly shown on save failure */
-[data-editable].edit-error {
-  outline-color: #ef4444;
-  background-color: color-mix(in srgb, #ef4444 8%, transparent);
-  animation: edit-error-shake 0.3s ease;
-}
-
-@keyframes edit-error-shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  75% { transform: translateX(4px); }
-}
-
-/* Validation error indicator on the input/select/textarea itself */
-.edit-input-error {
-  outline: 2px solid #ef4444 !important;
-  background-color: color-mix(in srgb, #ef4444 6%, transparent) !important;
-}
-
-[data-theme="dark"] .edit-input-error {
-  outline-color: #f87171 !important;
-  background-color: color-mix(in srgb, #ef4444 12%, transparent) !important;
-}
-
 /* Modal title: leave room for the Pico CSS close button (rel=prev, abs-positioned top-right) */
 #task-modal article header {
   display: flex;
@@ -1364,8 +1162,7 @@ a:focus,
 button:focus,
 [tabindex]:focus,
 .filter-multiselect-trigger:focus,
-.tag-multiselect-trigger:focus,
-[data-editable]:focus {
+.tag-multiselect-trigger:focus {
   outline: none;
 }
 
@@ -1402,24 +1199,6 @@ td a:focus-visible,
   outline-color: var(--pico-primary, #a78bfa);
 }
 
-/* Editable fields — keyboard focus ring when NOT in edit mode */
-[data-editable]:not(.editing):focus-visible {
-  outline: 2px solid var(--pico-primary, #7c3aed);
-  outline-offset: 2px;
-  border-radius: var(--pico-border-radius, 0.25rem);
-}
-
-/* Suppress ALL outlines on the wrapper while editing — focus belongs to the input */
-[data-editable].editing,
-[data-editable].editing:focus,
-[data-editable].editing:focus-visible {
-  outline: none !important;
-}
-
-[data-theme="dark"] [data-editable]:not(.editing):focus-visible {
-  outline-color: var(--pico-primary, #a78bfa);
-}
-
 /* Multi-select triggers (status/priority/tag filters) */
 .filter-multiselect-trigger:focus-visible,
 .tag-multiselect-trigger:focus-visible {
@@ -1445,16 +1224,6 @@ td a:focus-visible,
 
 [data-theme="dark"] .filter-tag-pill-remove:focus-visible,
 [data-theme="dark"] .filter-multiselect-pill-remove:focus-visible {
-  outline-color: var(--pico-primary, #a78bfa);
-}
-
-/* Inline edit save/cancel buttons */
-.inline-edit-btn:focus-visible {
-  outline: 2px solid var(--pico-primary, #7c3aed);
-  outline-offset: 1px;
-}
-
-[data-theme="dark"] .inline-edit-btn:focus-visible {
   outline-color: var(--pico-primary, #a78bfa);
 }
 
@@ -1558,61 +1327,29 @@ a.view-toggle-btn:focus-visible {
   line-height: 1.6;
 }
 
-/* Headings: scope margins to avoid conflicts with parent layout */
+/* Headings: compact, never larger than the task title */
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
 .markdown-body h4,
 .markdown-body h5,
 .markdown-body h6 {
-  margin-top: 1.25em;
-  margin-bottom: 0.5em;
+  margin-top: 0.75em;
+  margin-bottom: 0.35em;
+  font-weight: 600;
   line-height: 1.3;
 }
 
-.markdown-body h1 { font-size: 1.75em; }
-.markdown-body h2 { font-size: 1.4em; }
-.markdown-body h3 { font-size: 1.2em; }
-.markdown-body h4 { font-size: 1.05em; }
-.markdown-body h5 { font-size: 0.95em; }
-.markdown-body h6 { font-size: 0.875em; color: var(--pico-muted-color); }
+.markdown-body > :first-child { margin-top: 0; }
 
-/* Paragraphs */
-.markdown-body p {
-  margin-top: 0;
-  margin-bottom: 0.75em;
-}
+.markdown-body h1 { font-size: 1.05rem; }
+.markdown-body h2 { font-size: 1rem; }
+.markdown-body h3 { font-size: 0.95rem; }
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 { font-size: 0.9rem; }
+.markdown-body h6 { color: var(--pico-muted-color); }
 
-/* Inline code: visible background distinct from surrounding text */
-.markdown-body code {
-  background-color: var(--pico-code-background-color);
-  color: var(--pico-code-color);
-  font-family: var(--pico-font-family-monospace);
-  font-size: 0.875em;
-  padding: 0.15em 0.4em;
-  border-radius: var(--pico-border-radius);
-  white-space: pre-wrap;
-}
-
-/* Code blocks: dark background, monospace, horizontal scroll */
-.markdown-body pre {
-  background-color: var(--pico-code-background-color);
-  border-radius: var(--pico-border-radius);
-  padding: 1em 1.25em;
-  overflow-x: auto;
-  margin-bottom: 1em;
-}
-
-.markdown-body pre code {
-  background-color: transparent;
-  padding: 0;
-  font-size: 0.875em;
-  white-space: pre;
-  word-break: normal;
-  overflow-wrap: normal;
-}
-
-/* Lists: proper indentation and list-style */
 .markdown-body ul,
 .markdown-body ol {
   padding-left: 1.75em;
@@ -1630,6 +1367,15 @@ a.view-toggle-btn:focus-visible {
 
 .markdown-body li {
   margin-bottom: 0.25em;
+}
+
+/* Task-list items: the checkbox replaces the bullet */
+.markdown-body li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.markdown-body li > input[type="checkbox"] {
+  margin: 0 0.4em 0 -1.4em;
+  vertical-align: middle;
 }
 
 .markdown-body li > ul,
@@ -2475,7 +2221,6 @@ main.view-epics {
 .table-wrap > table { margin-bottom: 0; }
 .table-wrap th { white-space: nowrap; }
 .col-title { min-width: 14rem; }
-.col-title > [data-editable] { display: inline; }
 .row-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 2px; }
 .row-chips .pending-comments { margin-left: 0; }
 .col-assignee { white-space: nowrap; color: var(--pico-muted-color); }
@@ -2577,3 +2322,59 @@ main.view-epics {
 @media (max-width: 480px) {
   .task-meta { grid-template-columns: 5.5rem minmax(0, 1fr); }
 }
+
+/* ---- Task edit form (explicit edit mode; opened by the Edit button or `e`) ---- */
+.page-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.page-title-row h1 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.task-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  margin: 0;
+  padding: 2px 8px;
+  min-height: 0;
+  height: 26px;
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--pico-muted-color);
+  background: transparent;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+}
+.task-edit-btn:hover { color: var(--pico-color); border-color: var(--pico-muted-color); }
+.task-edit-btn svg { display: block; }
+.page-title-row .task-edit-btn { margin-top: 2px; }
+[data-task-detail].is-editing .task-edit-btn,
+[data-task-detail].is-editing .task-title,
+[data-task-detail].is-editing .ro-field { display: none; }
+.task-edit-form { margin: 0 0 16px; }
+.task-edit-form[hidden] { display: none; }
+.task-edit-form .edit-field { display: block; margin: 0 0 8px; min-width: 0; }
+.task-edit-form .edit-label { display: block; margin-bottom: 2px; font-size: 12px; color: var(--pico-muted-color); }
+.task-edit-form .edit-label .muted { margin-left: 4px; }
+.task-edit-form input,
+.task-edit-form select,
+.task-edit-form textarea { width: 100%; margin: 0; min-height: var(--tk-control-h); font-size: 14px; }
+.task-edit-form textarea {
+  min-height: 0;
+  resize: vertical;
+  font-family: var(--pico-font-family-monospace, ui-monospace, monospace);
+  font-size: 13px;
+}
+.task-edit-form .edit-row { display: flex; flex-wrap: wrap; gap: 0 12px; }
+.task-edit-form .edit-row .edit-field { flex: 0 1 9rem; min-width: 8rem; }
+.task-edit-form .edit-row .edit-field-tags { flex: 1 1 12rem; }
+.task-edit-form .edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-edit-form .edit-actions button { width: auto; margin: 0; padding: 0 12px; min-height: var(--tk-control-h); font-size: 13px; }
+.task-edit-form .edit-hint { font-size: 12px; }
+.task-edit-form .edit-input-error { border-color: #ef4444; box-shadow: 0 0 0 1px #ef4444; }
+
+/* Modal header label shown instead of the title while editing */
+.task-edit-label { display: none; color: var(--pico-muted-color); font-weight: 400; margin: 0; }
+[data-task-detail].is-editing .task-edit-label { display: block; }
+
+/* Task list: title link looks like text */
+.row-title-link { color: inherit; text-decoration: none; }
+.row-title-link:hover { text-decoration: underline; }

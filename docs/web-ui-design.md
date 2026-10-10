@@ -92,6 +92,12 @@ across projects and workspaces, and who leaves feedback in comments.
    - Subtasks (for epics).
    - Comments, then the comment form.
 - Comment header: author badge, time and markers aligned left in one row.
+- Editing is explicit: an Edit button (or `e`) opens a form; fields are never
+  editable by click. The form replaces title, status, priority, tags and
+  description (one `PATCH /api/tasks/{id}` with the changed fields). Save, Cancel,
+  Ctrl/Cmd+Enter saves; Escape cancels only when nothing changed (otherwise a toast
+  asks to press Cancel). Polling never swaps away an open form. Epic detail is
+  read-only.
 - Modal: no "View full page" button in the footer. A small "open in full
   page" icon link (with aria-label and tooltip) sits in the modal header next
   to the close button.

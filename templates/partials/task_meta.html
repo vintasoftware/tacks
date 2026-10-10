@@ -1,11 +1,11 @@
 {% import "macros.html" as m %}
-{# Metadata definition list shared by task detail (page and modal) and epic detail. Needs: task, parent, ws, ws_groups, updated_rel, editable. #}
+{# Metadata definition list shared by task detail (page and modal) and epic detail. Needs: task, parent, ws, ws_groups, updated_rel. #}
 <dl class="task-meta">
-  <dt>Status</dt>
-  <dd{% if editable %} data-editable data-field="status" data-task-id="{{ task.id }}"{% endif %}>{% call m::status_badge(task.status) %}</dd>
+  <dt class="ro-field">Status</dt>
+  <dd class="ro-field">{% call m::status_badge(task.status) %}</dd>
 
-  <dt>Priority</dt>
-  <dd{% if editable %} data-editable data-field="priority" data-task-id="{{ task.id }}"{% endif %}>{% call m::priority_badge(task.priority) %}</dd>
+  <dt class="ro-field">Priority</dt>
+  <dd class="ro-field">{% call m::priority_badge(task.priority) %}</dd>
 
   <dt>Assignee</dt>
   <dd>{% if let Some(a) = task.assignee.as_deref() %}{{ a }}{% else %}<span class="muted">Unassigned</span>{% endif %}</dd>
@@ -13,8 +13,8 @@
   <dt>Epic</dt>
   <dd>{% if let Some(p) = parent.as_ref() %}<a href="/epics/{{ p.id }}" class="epic-badge">{{ p.id }}: {{ p.title }}</a>{% else %}<span class="muted">None</span>{% endif %}</dd>
 
-  <dt>Tags</dt>
-  <dd{% if editable %} data-editable data-field="tags" data-task-id="{{ task.id }}"{% endif %}>{% for tag in &task.tags %}<span class="tag-pill">{{ tag }}</span> {% endfor %}{% if task.tags.is_empty() %}<span class="muted empty-value">None</span>{% endif %}</dd>
+  <dt class="ro-field">Tags</dt>
+  <dd class="ro-field">{% for tag in &task.tags %}<span class="tag-pill">{{ tag }}</span> {% endfor %}{% if task.tags.is_empty() %}<span class="muted empty-value">None</span>{% endif %}</dd>
 
   <dt>Workspace</dt>
   <dd class="task-workspace" data-task-id="{{ task.id }}">

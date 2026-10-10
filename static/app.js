@@ -311,6 +311,7 @@
       '  <table>',
       '    <tbody>',
       '      <tr><td><kbd>n</kbd></td><td>New task</td></tr>',
+      '      <tr><td><kbd>e</kbd></td><td>Edit task (when a task is shown)</td></tr>',
       '      <tr><td><kbd>/</kbd></td><td>Focus tag filter</td></tr>',
       '      <tr><td><kbd>?</kbd></td><td>Show / hide this help</td></tr>',
       '      <tr><td><kbd>j</kbd> / <kbd>&darr;</kbd></td><td>Next row (task list)</td></tr>',
@@ -559,7 +560,7 @@
   function extractModalTaskId() {
     var dlg = document.getElementById('task-modal');
     if (!dlg) return null;
-    // Look for data-task-id on any element inside (article header, editable fields, etc.)
+    // Look for data-task-id on any element inside (the task detail article)
     var el = dlg.querySelector('[data-task-id]');
     if (el) return el.getAttribute('data-task-id');
     // Fallback: look for a /tasks/<id> link inside the modal
@@ -625,7 +626,7 @@
     htmx.ajax('GET', '/tasks/' + encodeURIComponent(card.getAttribute('data-task-id')), { target: '#task-modal', swap: 'innerHTML' });
   });
 
-  // Pause HTMX polling swaps while inline editing or dragging is active
+  // Pause HTMX polling swaps while the edit form is open or dragging is active
   // Track in-flight filter requests to suppress stale polling swaps
   var filterRequestInFlight = false;
   document.addEventListener('htmx:beforeRequest', function (e) {
@@ -661,29 +662,38 @@
         return;
       }
     }
-    // Guard content-area/content-inner polling swaps when inline editing or dropdown open
+    // Guard content-area/content-inner polling swaps when the edit form or a dropdown is open
     if (e.detail.target && (e.detail.target.id === 'content-area' || e.detail.target.id === 'content-inner')) {
-      var editing = document.querySelector('[data-editable].editing');
+      var editing = openEditForm();
       var dropdownOpen = document.querySelector('.filter-multiselect-dropdown:not([hidden])');
       if (editing || dropdownOpen) {
         e.detail.shouldSwap = false;
         return;
       }
     }
-    // Guard tbody polling swaps (task list) when inline editing
+    // Guard tbody polling swaps (task list) while the edit form is open
     if (e.detail.target && e.detail.target.tagName === 'TBODY') {
-      var editing = document.querySelector('[data-editable].editing');
-      if (editing) {
+      if (openEditForm()) {
         e.detail.shouldSwap = false;
       }
     }
   });
 
+  // Close the task modal unless its edit form holds unsaved changes (same rule as Escape).
+  function closeTaskModal(dlg) {
+    var form = dlg.querySelector('.task-edit-form:not([hidden])');
+    if (form && formIsDirty(form)) {
+      showToast('Unsaved changes \u2014 press Cancel to discard', 'error');
+      return;
+    }
+    dlg.close();
+  }
+
   // Delegate close-button clicks inside the task modal
   document.addEventListener('click', function (e) {
     if (e.target.closest('#task-modal [aria-label="Close"]')) {
       var dlg = document.getElementById('task-modal');
-      if (dlg) dlg.close();
+      if (dlg) closeTaskModal(dlg);
     }
   });
 
@@ -691,7 +701,7 @@
   document.addEventListener('click', function (e) {
     var dlg = document.getElementById('task-modal');
     if (dlg && dlg.open && e.target === dlg) {
-      dlg.close();
+      closeTaskModal(dlg);
     }
   });
 
@@ -1461,87 +1471,12 @@
   document.addEventListener('DOMContentLoaded', initColumnCollapse);
   document.addEventListener('htmx:afterSettle', initColumnCollapse);
 
-  // --- Inline editing ---
+  // --- Task edit form ---
+  // Editing is explicit: the Edit button (or `e`) shows the server-rendered
+  // `.task-edit-form` of a task detail; fields are never editable by click.
 
-  // Track elements currently being edited to avoid double-saves.
-  // WeakMap<HTMLElement, { saved: boolean, original: string }>
-  var editingState = new WeakMap();
-
-  // Track elements with an in-flight PATCH request to prevent duplicate saves.
-  // Cleared when the fetch settles (success or failure).
-  var patchInFlight = new WeakSet();
-
-  // Build a status badge element for re-rendering after save (DOM APIs only, no HTML strings)
-  function statusBadgeEl(status) {
-    status = String(status);
-    var icons = { open: '○', in_progress: '◐', done: '✓', blocked: '⊘' };
-    var labels = { open: 'Open', in_progress: 'In Progress', done: 'Done', blocked: 'Blocked' };
-    var icon = icons[status] || '';
-    var label = labels[status] || status.replace('_', ' ');
-    var el = document.createElement('span');
-    el.className = 'badge status-' + status.replace(/[^a-z_]/g, '');
-    el.textContent = icon + ' ' + label;
-    return el;
-  }
-
-  // Build a priority badge element for re-rendering after save
-  function priorityBadgeEl(priority) {
-    var icons = { 0: '▲▲', 1: '▲', 2: '▬', 3: '▽', 4: '·' };
-    var n = Number(priority);
-    var icon = icons[n] || '';
-    var el = document.createElement('span');
-    el.className = 'badge priority-' + (Number.isInteger(n) ? n : '');
-    el.textContent = icon + ' P' + n;
-    return el;
-  }
-
-  // Build a tag pill element for a single tag
-  function tagPillEl(tag) {
-    var el = document.createElement('span');
-    el.className = 'tag-pill';
-    el.textContent = tag;
-    return el;
-  }
-
-  // Replace the content of `el` with the new value after a successful save
-  function renderSavedValue(el, field, value) {
-    el.textContent = '';
-    if (field === 'status') {
-      el.appendChild(statusBadgeEl(value));
-    } else if (field === 'priority') {
-      el.appendChild(priorityBadgeEl(value));
-    } else if (field === 'tags') {
-      var tagList = Array.isArray(value) ? value : [value];
-      tagList.forEach(function (t, i) {
-        if (i > 0) el.appendChild(document.createTextNode(' '));
-        el.appendChild(tagPillEl(t));
-      });
-    } else {
-      // Plain text fields
-      el.textContent = value;
-    }
-  }
-
-  // Finish editing: restore original content and remove editing class
-  function cancelEdit(el) {
-    var state = editingState.get(el);
-    if (!state) return;
-    editingState.delete(el);
-    el.classList.remove('editing');
-    el.innerHTML = state.original;
-  }
-
-  // Show a brief error flash on the element
-  function flashError(el) {
-    el.classList.add('edit-error');
-    setTimeout(function () {
-      el.classList.remove('edit-error');
-    }, 2000);
-  }
-
-  // Validate a field value before committing.
+  // Validate a field value before saving.
   // Returns { valid: true } on success, or { valid: false, message: string } on failure.
-  // Side-effect: for 'tags', mutates rawValue into cleaned form (caller uses the returned cleaned value).
   function validateEdit(field, rawValue) {
     if (field === 'title') {
       if (!rawValue || rawValue.trim().length === 0) {
@@ -1565,313 +1500,168 @@
     return { valid: true };
   }
 
-  // Commit an edit: PATCH the server and update the DOM on success
-  function commitEdit(el, field, rawValue) {
-    var state = editingState.get(el);
-    if (!state || state.saved) return;
-    // Prevent duplicate PATCHes: if a request is already in-flight for this element, bail out
-    if (patchInFlight.has(el)) return;
+  // Split a comma-separated tag string into trimmed, non-empty tags.
+  function parseTags(text) {
+    return text
+      .split(',')
+      .map(function (t) { return t.trim(); })
+      .filter(function (t) { return t.length > 0; });
+  }
 
-    // Clean up tags before validation: trim each tag, remove empty ones
-    if (field === 'tags') {
-      rawValue = rawValue
-        .split(',')
-        .map(function (t) { return t.trim(); })
-        .filter(function (t) { return t.length > 0; })
-        .join(', ');
+  // The open edit form that is actually on screen (not inside a closed modal), or null.
+  function openEditForm() {
+    var forms = document.querySelectorAll('.task-edit-form:not([hidden])');
+    for (var i = 0; i < forms.length; i++) {
+      if (!forms[i].closest('dialog:not([open])')) return forms[i];
     }
+    return null;
+  }
 
-    // Validate before firing the PATCH
-    var validation = validateEdit(field, rawValue);
-    if (!validation.valid) {
-      // Keep edit mode active — do NOT set state.saved
-      showToast(validation.message, 'error');
-      // Add a visual error indicator on the input
-      var inputEl = el.querySelector('input, textarea, select');
-      if (inputEl) {
-        inputEl.classList.add('edit-input-error');
-        // Remove error styling as soon as the user starts correcting the value
-        var clearError = function () { inputEl.classList.remove('edit-input-error'); };
-        inputEl.addEventListener('input', clearError, { once: true });
-        inputEl.addEventListener('change', clearError, { once: true });
-      }
-      return;
-    }
-
-    state.saved = true;
-
-    var taskId = el.getAttribute('data-task-id');
-    if (!taskId) {
-      cancelEdit(el);
-      return;
-    }
-
-    // Build the PATCH payload
+  // Compare the form with its initial (server-rendered) values.
+  // Returns { payload: {changed fields}, error: {field, message} | null }.
+  function collectEdit(form) {
+    var f = form.elements;
     var payload = {};
-    if (field === 'priority') {
-      payload[field] = parseInt(rawValue, 10);
-    } else if (field === 'tags') {
-      // Split comma-separated string into trimmed array, drop empty strings
-      payload[field] = rawValue
-        .split(',')
-        .map(function (t) { return t.trim(); })
-        .filter(function (t) { return t.length > 0; });
-    } else {
-      payload[field] = rawValue;
-    }
+    var title = f.title.value;
+    if (title.trim() !== f.title.defaultValue.trim()) payload.title = title.trim();
+    var statusInit = f.status.querySelector('option[selected]');
+    if (statusInit && f.status.value !== statusInit.value) payload.status = f.status.value;
+    var prioInit = f.priority.querySelector('option[selected]');
+    if (prioInit && f.priority.value !== prioInit.value) payload.priority = parseInt(f.priority.value, 10);
+    var tags = parseTags(f.tags.value);
+    if (tags.join('\u0000') !== parseTags(f.tags.defaultValue).join('\u0000')) payload.tags = tags;
+    if (f.description.value !== f.description.defaultValue) payload.description = f.description.value;
 
-    patchInFlight.add(el);
+    // Same rules as validateEdit, applied to the current values (title always, others if changed)
+    var checks = [['title', title]];
+    if ('status' in payload) checks.push(['status', f.status.value]);
+    if ('priority' in payload) checks.push(['priority', f.priority.value]);
+    for (var i = 0; i < checks.length; i++) {
+      var v = validateEdit(checks[i][0], checks[i][1]);
+      if (!v.valid) return { payload: payload, error: { field: checks[i][0], message: v.message } };
+    }
+    return { payload: payload, error: null };
+  }
+
+  function formIsDirty(form) {
+    return Object.keys(collectEdit(form).payload).length > 0;
+  }
+
+  // Show the edit form of a task detail container and focus the title.
+  function beginEdit(detail) {
+    if (!detail) return;
+    var form = detail.querySelector('.task-edit-form');
+    if (!form || !form.hidden) return;
+    form.hidden = false;
+    detail.classList.add('is-editing');
+    form.elements.title.focus();
+    form.elements.title.select();
+  }
+
+  // Close the edit form, restoring the initial values.
+  function endEdit(form) {
+    var detail = form.closest('[data-task-detail]');
+    form.reset();
+    form.hidden = true;
+    form.classList.remove('saving');
+    if (detail) {
+      detail.classList.remove('is-editing');
+      var btn = detail.querySelector('[data-task-edit]');
+      if (btn) btn.focus();
+    }
+  }
+
+  // Save the changed fields with one PATCH, then refresh the detail.
+  function saveEdit(form) {
+    if (form.classList.contains('saving')) return;
+    var result = collectEdit(form);
+    var inputs = form.querySelectorAll('.edit-input-error');
+    for (var i = 0; i < inputs.length; i++) inputs[i].classList.remove('edit-input-error');
+    if (result.error) {
+      var bad = form.elements[result.error.field];
+      if (bad) {
+        bad.classList.add('edit-input-error');
+        bad.focus();
+      }
+      showToast(result.error.message, 'error');
+      return;
+    }
+    if (Object.keys(result.payload).length === 0) {
+      endEdit(form);
+      return;
+    }
+    var taskId = form.getAttribute('data-task-id');
+    form.classList.add('saving');
     fetch('/api/tasks/' + encodeURIComponent(taskId), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(result.payload),
     })
       .then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       })
       .then(function () {
-        // Successful save — render the new value
-        patchInFlight.delete(el);
-        editingState.delete(el);
-        el.classList.remove('editing');
-        renderSavedValue(el, field, payload[field]);
+        if (form.closest('#task-modal')) {
+          form.classList.remove('saving');
+          htmx.ajax('GET', '/tasks/' + encodeURIComponent(taskId), { target: '#task-modal', swap: 'innerHTML' });
+        } else {
+          window.location.reload();
+        }
       })
       .catch(function () {
-        // Failed — revert to original, flash error, and show toast
-        patchInFlight.delete(el);
-        editingState.delete(el);
-        el.classList.remove('editing');
-        el.innerHTML = state.original;
-        flashError(el);
+        form.classList.remove('saving');
         showToast('Failed to save — change not applied', 'error');
       });
   }
 
-  // Create the appropriate input element for the given field
-  function createInput(field, currentText) {
-    var input;
-
-    if (field === 'status') {
-      input = document.createElement('select');
-      input.className = 'inline-edit-select';
-      var statusLabels = { open: '○ Open', in_progress: '◐ In Progress', done: '✓ Done', blocked: '⊘ Blocked' };
-      ['open', 'in_progress', 'done', 'blocked'].forEach(function (opt) {
-        var o = document.createElement('option');
-        o.value = opt;
-        o.textContent = statusLabels[opt] || opt.replace('_', ' ');
-        // Strip leading icon character (non-ASCII) then spaces before matching
-        var normalised = currentText.replace(/^[^\w]+/, '').trim().replace(/\s+/g, '_').toLowerCase();
-        if (normalised === opt) {
-          o.selected = true;
-        }
-        input.appendChild(o);
-      });
-    } else if (field === 'priority') {
-      input = document.createElement('select');
-      input.className = 'inline-edit-select';
-      var priorityLabels = { 0: '▲▲ P0', 1: '▲ P1', 2: '▬ P2', 3: '▽ P3', 4: '· P4' };
-      [0, 1, 2, 3, 4].forEach(function (p) {
-        var o = document.createElement('option');
-        o.value = String(p);
-        o.textContent = priorityLabels[p] || 'P' + p;
-        // currentText might be "▲ P1", "P1", or "1" — strip non-digits
-        var numText = currentText.replace(/[^0-9]/g, '');
-        if (numText === String(p)) o.selected = true;
-        input.appendChild(o);
-      });
-    } else if (field === 'description') {
-      input = document.createElement('textarea');
-      input.className = 'inline-edit-textarea';
-      input.value = currentText;
-      // Auto-size based on content
-      input.rows = Math.max(3, (currentText.match(/\n/g) || []).length + 2);
-    } else {
-      // title, assignee, tags — plain text input
-      input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'inline-edit-input';
-      input.value = currentText;
-    }
-
-    return input;
-  }
-
-  // Extract the "current value" from an editable element's inner text/content.
-  // For badge/pill elements we parse the text content; for plain text we use textContent.
-  function extractCurrentText(el, field) {
-    // A muted placeholder ("None", "No description") is not a value.
-    var emptyEl = el.querySelector('.empty-value');
-    if (emptyEl && el.textContent.trim() === emptyEl.textContent.trim()) return '';
-    if (field === 'tags') {
-      // Tags are rendered as multiple .tag-pill spans — collect their text
-      var pills = el.querySelectorAll('.tag-pill');
-      if (pills.length > 0) {
-        return Array.from(pills).map(function (p) { return p.textContent.trim(); }).join(', ');
-      }
-    }
-    // For all other fields: use trimmed textContent (works for badges too)
-    return el.textContent.trim();
-  }
-
-  // Create save (✓) and cancel (✗) action buttons for text-mode edits
-  function createActionButtons(el, field, input) {
-    var actions = document.createElement('span');
-    actions.className = 'inline-edit-actions';
-
-    var saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
-    saveBtn.className = 'inline-edit-btn inline-edit-btn-save';
-    saveBtn.setAttribute('aria-label', 'Save');
-    saveBtn.textContent = '\u2713'; // ✓
-
-    var cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'inline-edit-btn inline-edit-btn-cancel';
-    cancelBtn.setAttribute('aria-label', 'Cancel');
-    cancelBtn.textContent = '\u2715'; // ✕
-
-    // mousedown: prevent blur from firing before the click completes
-    saveBtn.addEventListener('mousedown', function (e) { e.preventDefault(); });
-    cancelBtn.addEventListener('mousedown', function (e) { e.preventDefault(); });
-
-    saveBtn.addEventListener('click', function () {
-      commitEdit(el, field, input.value);
-    });
-
-    cancelBtn.addEventListener('click', function () {
-      cancelEdit(el);
-    });
-
-    actions.appendChild(saveBtn);
-    actions.appendChild(cancelBtn);
-    return actions;
-  }
-
-  // Begin editing an element
-  function beginEdit(el) {
-    // Already editing?
-    if (editingState.has(el)) return;
-
-    var field = el.getAttribute('data-field');
-    if (!field) return;
-
-    var originalHtml = el.innerHTML;
-    var currentText = extractCurrentText(el, field);
-
-    editingState.set(el, { saved: false, original: originalHtml });
-    el.classList.add('editing');
-
-    var input = createInput(field, currentText);
-
-    // For select elements: insert directly (no wrapper/buttons), save on change
-    if (field === 'status' || field === 'priority') {
-      el.innerHTML = '';
-      el.appendChild(input);
-      input.focus();
-      input.addEventListener('change', function () {
-        commitEdit(el, field, input.value);
-      });
-      // Close on blur (handles click-away or same-value selection)
-      input.addEventListener('blur', function () {
-        var state = editingState.get(el);
-        if (state && !state.saved) {
-          cancelEdit(el);
-        }
-      });
-      // Escape: cancel edit (preventDefault stops native <dialog> close)
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          e.stopPropagation();
-          cancelEdit(el);
-        }
-      });
+  document.addEventListener('click', function (e) {
+    var editBtn = e.target.closest('[data-task-edit]');
+    if (editBtn) {
+      beginEdit(editBtn.closest('[data-task-detail]'));
       return;
     }
-
-    // For text inputs and textareas: wrap in flex row with save/cancel buttons
-    var wrapper = document.createElement('span');
-    wrapper.className = 'inline-edit-wrapper';
-    wrapper.appendChild(input);
-
-    // Textareas span the full width — buttons go below rather than inline
-    if (field !== 'description') {
-      wrapper.appendChild(createActionButtons(el, field, input));
-    }
-
-    el.innerHTML = '';
-    el.appendChild(wrapper);
-
-    // For description textarea, add a block-level actions row below
-    if (field === 'description') {
-      var blockActions = document.createElement('div');
-      blockActions.className = 'inline-edit-actions';
-      blockActions.style.marginTop = '0.35em';
-
-      var saveBtn2 = document.createElement('button');
-      saveBtn2.type = 'button';
-      saveBtn2.className = 'inline-edit-btn inline-edit-btn-save';
-      saveBtn2.setAttribute('aria-label', 'Save');
-      saveBtn2.textContent = '\u2713';
-
-      var cancelBtn2 = document.createElement('button');
-      cancelBtn2.type = 'button';
-      cancelBtn2.className = 'inline-edit-btn inline-edit-btn-cancel';
-      cancelBtn2.setAttribute('aria-label', 'Cancel');
-      cancelBtn2.textContent = '\u2715';
-
-      saveBtn2.addEventListener('mousedown', function (e) { e.preventDefault(); });
-      cancelBtn2.addEventListener('mousedown', function (e) { e.preventDefault(); });
-      saveBtn2.addEventListener('click', function () { commitEdit(el, field, input.value); });
-      cancelBtn2.addEventListener('click', function () { cancelEdit(el); });
-
-      blockActions.appendChild(saveBtn2);
-      blockActions.appendChild(cancelBtn2);
-      el.appendChild(blockActions);
-    }
-
-    // Focus and select text
-    input.focus();
-    if (input.select) {
-      input.select();
-    }
-
-    // For text inputs and textareas: save on Enter (text only), Escape cancels
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        cancelEdit(el);
-        return;
-      }
-      // Enter saves for single-line inputs; Shift+Enter in textarea is a newline
-      if (e.key === 'Enter' && field !== 'description') {
-        e.preventDefault();
-        commitEdit(el, field, input.value);
-      }
-    });
-
-    // Save on blur (handles click-away), but only if not clicking an action button
-    input.addEventListener('blur', function (e) {
-      // relatedTarget is the element receiving focus — skip blur-save if it's one of our buttons
-      if (e.relatedTarget && e.relatedTarget.closest('.inline-edit-actions')) return;
-      var state = editingState.get(el);
-      if (state && !state.saved) {
-        commitEdit(el, field, input.value);
-      }
-    });
-  }
-
-  // Event delegation: clicks on [data-editable] elements begin editing
-  document.addEventListener('click', function (e) {
-    var el = e.target.closest('[data-editable]');
-    if (!el) return;
-    // Don't start a new edit if we clicked inside an already-active input or action button
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-    if (e.target.closest('.inline-edit-actions')) return;
-    beginEdit(el);
+    var cancelBtn = e.target.closest('.task-edit-form .edit-cancel');
+    if (cancelBtn) endEdit(cancelBtn.closest('.task-edit-form'));
   });
+
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form.classList || !form.classList.contains('task-edit-form')) return;
+    e.preventDefault();
+    saveEdit(form);
+  });
+
+  // Ctrl/Cmd+Enter saves from any field of the form.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+    var form = e.target.closest && e.target.closest('.task-edit-form');
+    if (!form) return;
+    e.preventDefault();
+    saveEdit(form);
+  });
+
+  // Never let the native <dialog> Escape close discard unsaved edits.
+  document.addEventListener('cancel', function (e) {
+    if (e.target && e.target.id === 'task-modal') {
+      var form = openEditForm();
+      if (form && formIsDirty(form)) e.preventDefault();
+    }
+  }, true);
+
+  // `e` opens the edit form of the task detail that is shown (modal first, else the page).
+  function editShortcut() {
+    var dlg = document.getElementById('task-modal');
+    var detail = null;
+    if (dlg && dlg.open) {
+      detail = dlg.querySelector('[data-task-detail]');
+    } else {
+      detail = document.querySelector('.page-detail[data-task-detail]');
+    }
+    if (!detail || !detail.querySelector('.task-edit-form')) return false;
+    beginEdit(detail);
+    return true;
+  }
 
   // --- Board drag-and-drop ---
 
@@ -2006,6 +1796,20 @@
   document.addEventListener('keydown', function (e) {
     var key = e.key;
 
+    // An open edit form owns Escape: nothing changed cancels it, changes are kept.
+    if (key === 'Escape') {
+      var editForm = openEditForm();
+      if (editForm) {
+        e.preventDefault();
+        if (formIsDirty(editForm)) {
+          showToast('Unsaved changes — press Cancel to discard', 'error');
+        } else {
+          endEdit(editForm);
+        }
+        return;
+      }
+    }
+
     // Escape is the only shortcut that works while typing. In a text field the first
     // Escape just blurs the field (the draft is kept); with nothing focused it closes the
     // topmost dialog. preventDefault stops the native <dialog> close on the first press.
@@ -2050,6 +1854,11 @@
       var newBtn = document.querySelector('.new-issue-btn');
       var modalUrl = (newBtn && newBtn.getAttribute('hx-get')) || '/tasks/new/modal';
       htmx.ajax('GET', modalUrl, { target: '#task-modal', swap: 'innerHTML' });
+      return;
+    }
+
+    if (key === 'e') {
+      if (editShortcut()) e.preventDefault();
       return;
     }
 

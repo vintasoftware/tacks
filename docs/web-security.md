@@ -42,7 +42,7 @@ inline script/style out of the templates.
 
 ## Client-side rendering
 
-`static/app.js` builds dynamic DOM (filter pills, inline-edit results, dialogs) with
+`static/app.js` builds dynamic DOM (filter pills, edit-form messages, dialogs) with
 `createElement`/`textContent`/`setAttribute`, never by concatenating data into HTML strings.
 Task ids read from `location.hash` are validated against
 `^[A-Za-z0-9_-]+-[A-Za-z0-9]+(\.[0-9]+)*$` and URL-encoded before use; invalid hashes are ignored.

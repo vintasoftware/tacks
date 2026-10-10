@@ -7,12 +7,12 @@
 </section>
 {% endif %}
 
-<section class="detail-section">
+<section class="detail-section ro-field">
   <h4 class="detail-heading">Description</h4>
   {% if let Some(html) = description_html.as_deref() %}
-  <div class="task-description markdown-body" data-editable data-field="description" data-task-id="{{ task.id }}">{{ html|safe }}</div>
+  <div class="task-description markdown-body">{{ html|safe }}</div>
   {% else %}
-  <div class="task-description" data-editable data-field="description" data-task-id="{{ task.id }}"><span class="muted empty-value">No description</span></div>
+  <div class="task-description"><span class="muted empty-value">No description</span></div>
   {% endif %}
 </section>
 

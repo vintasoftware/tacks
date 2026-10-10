@@ -3,7 +3,7 @@
 {% block title %}{{ task.id }} — Tacks{% endblock %}
 
 {% block content %}
-<div class="page-detail">
+<div class="page-detail" data-task-detail data-task-id="{{ task.id }}">
 <nav aria-label="Breadcrumb">
   <ol class="breadcrumb">
     <li><a href="{{ layout.prefix }}/tasks">Issues</a></li>
@@ -11,7 +11,11 @@
   </ol>
 </nav>
 
-<h1 data-editable data-field="title" data-task-id="{{ task.id }}">{{ task.title }}</h1>
+<div class="page-title-row">
+<h1 class="task-title">{{ task.title }}</h1>
+{% if editable %}<button type="button" class="task-edit-btn" data-task-edit aria-label="Edit task" title="Edit (e)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span>Edit</span></button>{% endif %}
+</div>
+{% if editable %}{% include "partials/task_edit_form.html" %}{% endif %}
 
 {% include "partials/task_meta.html" %}
 {% include "partials/task_body.html" %}

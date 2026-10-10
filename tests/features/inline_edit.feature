@@ -1,6 +1,6 @@
 Feature: Inline editing of task fields
   Tasks can be edited field-by-field via the PATCH /api/tasks/:id endpoint,
-  supporting the click-to-edit inline editing UI.  Each scenario verifies that
+  supporting the edit form of the task detail.  Each scenario verifies that
   the change persists by fetching the task via GET after the PATCH.
 
   Background:

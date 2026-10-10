@@ -174,6 +174,41 @@ Feature: Web view pages
     Then the response status is 200
     And the response body contains "aria-label="
 
+  Scenario: Task detail page has an Edit button and a prefilled edit form
+    Given I created a task via API with title "Edit <b>me</b>" as "edit-task"
+    When I GET the HTML task "edit-task"
+    Then the response status is 200
+    And the response body contains "data-task-edit"
+    And the response body contains "task-edit-form"
+    And the response body contains 'name="title" value="Edit &#60;b&#62;me&#60;/b&#62;"'
+    And the response body does not contain "<b>me</b>"
+    And the response body does not contain "data-editable"
+
+  Scenario: Task detail modal fragment has an Edit button and a prefilled edit form
+    Given I created a task via API with title "Modal edit <b>me</b>" as "edit-modal"
+    When I HTMX GET the task "edit-modal"
+    Then the response status is 200
+    And the response body contains "data-task-edit"
+    And the response body contains "task-edit-form"
+    And the response body contains 'name="title" value="Modal edit &#60;b&#62;me&#60;/b&#62;"'
+    And the response body does not contain "<b>me</b>"
+    And the response body does not contain "data-editable"
+
+  Scenario: Task list page has no click-to-edit cells
+    Given I created a task via API with title "List task" as "list-edit"
+    When I GET "/tasks"
+    Then the response status is 200
+    And the response body contains "List task"
+    And the response body does not contain "data-editable"
+
+  Scenario: Task list title is a link that opens the modal
+    Given I created a task via API with title "Linked title" as "list-link"
+    When I GET "/tasks"
+    Then the response status is 200
+    And the response body contains resolved 'hx-get="/tasks/@id(list-link)"'
+    And the response body contains resolved 'class="row-title-link" href="/tasks/@id(list-link)"'
+    And the response body contains "Linked title</a>"
+
   Scenario: Direct request for task detail returns full page
     Given I created a task via API with title "Full page task" as "full-task"
     When I GET the HTML task "full-task"

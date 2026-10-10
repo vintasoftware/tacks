@@ -140,14 +140,14 @@ Kanban board with drag-and-drop status changes, column counts, and multi-select 
 
 ### Task list
 
-Sortable table with inline editing — click any field to edit in place.
+Sortable table. Open a task and use the Edit button (or press `e`) to edit its fields in a form.
 
 ![Task list](docs/images/list.png)
 
 ### Features
 
 - **Kanban board** with drag-and-drop between status columns
-- **Inline editing** on both board and list views
+- **Explicit editing**: an Edit button (or `e`) on the task detail opens a form for title, status, priority, tags and description
 - **Multi-select filters** for status, priority, epic, and tags
 - **Dark mode** by default
 - **Keyboard shortcuts** — press `?` for the full list

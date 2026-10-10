@@ -1291,7 +1291,7 @@ struct TaskDetailTemplate {
     children: Vec<Task>,
     /// Relative last-update time ("2h ago").
     updated_rel: String,
-    /// Metadata fields are inline-editable (true on task detail).
+    /// Show the Edit button and edit form (true on task detail).
     editable: bool,
 }
 
@@ -1319,7 +1319,7 @@ struct TaskDetailFragmentTemplate {
     children: Vec<Task>,
     /// Relative last-update time ("2h ago").
     updated_rel: String,
-    /// Metadata fields are inline-editable (true on task detail).
+    /// Show the Edit button and edit form (true on task detail).
     editable: bool,
 }
 
