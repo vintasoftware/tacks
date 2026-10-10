@@ -16,6 +16,7 @@ const COMMAND_REFERENCE: &[&str] = &[
     "tk dep add|remove <child> <parent>",
     "tk comment <id> <body> (reply to user feedback with it)",
     "Descriptions, notes and comments are markdown (rendered in the web UI): use checklists, code spans and multi-line text via heredoc",
+    "Write descriptions for the user to review and decide; when blocked, set -s blocked and add a '## Blocked' section (cause, tried, decision needed, options, recommendation)",
     "tk stats [--oneline] [--json]",
     "tk workspaces [--json]",
     "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen (reads only; do not use it for writes unless the user asked)",

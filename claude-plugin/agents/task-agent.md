@@ -81,13 +81,29 @@ Check for newly unblocked work (closing a task may have unblocked its dependents
 
 **Close when done, not before.** If you close a task that isn't actually done, future agents or sessions will assume it's complete and skip it.
 
-**File discoveries, don't silently skip them.** When you notice something broken, missing, or worth doing, file a task. Use `tk dep add` to wire it into the dependency graph so it surfaces at the right time.
+**File discoveries, don't silently skip them.** When you notice something broken, missing, or worth doing, file a task. Write the description for the human reviewer, who reads it in the web UI without your context: **Context** (why, what you found), **Approach** (plan, rejected alternatives), **Done when** (`- [ ]` checklist), **Open questions**. Keep it current with `tk update <id> -d` as you learn things; notes are only for short-lived working state. Use `tk dep add` to wire it into the dependency graph so it surfaces at the right time.
 
 **If blocked, say so explicitly.** If you cannot make progress on a task because of a missing prerequisite, external dependency, or need for human input:
+
+1. Set the status: `tk update <id> --status blocked`
+2. Put a `## Blocked` section at the top of the description, keeping the existing description below it. `-d` replaces the whole description, so read the current text with `tk show <id> --json` (field `description`) and pass the full new text:
 ```bash
-tk update <id> --status blocked --notes "Blocked because: <reason>"
+tk update <id> -d "$(cat <<'EOF'
+## Blocked
+**Blocker:** <specific error, missing access or unclear requirement>
+**Tried:** <what you already attempted>
+
+**Decision needed:** <what the user must decide>
+- A. <option and trade-off>
+- B. <option and trade-off>
+
+**Recommendation:** <your pick and why>
+
+<existing description text, unchanged>
+EOF
+)"
 ```
-Then explain clearly to the user what is needed to unblock it.
+3. Tell the user in the session too, then stop working on that task. The user answers by commenting on the task; act on the comment, remove or update the `## Blocked` section, reply with `tk comment`, and set the status back to `in_progress`.
 
 **Prefer higher priority.** When multiple tasks are ready, always pick the lower priority number (P0 > P1 > P2 > P3 > P4).
 

@@ -51,6 +51,7 @@ tk create "Write unit tests" --parent tk-a1b2 --json
 
 ## Notes
 
+- Write the description for the human reviewer, who reads it in the web UI without your context: Context, Approach, Done when (checklist), Open questions.
 - Task IDs are hash-based: `tk-XXXX` format.
 - Subtask IDs use hierarchical format: `tk-a1b2.1`, `tk-a1b2.2`, etc.
 - When `--parent` is used, the parent task is automatically tagged as `epic` if it isn't already.

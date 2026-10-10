@@ -60,6 +60,7 @@ tk update tk-c3d4.1 --parent none
 
 ## Notes
 
+- Write for the human reviewer. `-d` replaces the whole description (read it first with `tk show <id> --json`). When blocked, run `--status blocked` and add a `## Blocked` section at the top of the description: cause, what you tried, the decision needed, options with trade-offs, and your recommendation. Then tell the user and stop on that task.
 - `--claim` is the standard way to start working on a task: it sets `status=in_progress` and records the assignee.
 - `--notes` **overwrites** previous notes — it is mutable working context, not a log. Use `tk comment` to append to the activity log instead.
 - `--move-to` registers the target workspace if it is new; see `/tacks:workspaces` for listing workspaces.

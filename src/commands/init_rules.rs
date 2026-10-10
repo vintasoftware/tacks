@@ -43,26 +43,64 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 2. Pick a task: `tk ready --limit 1`
 3. Claim it: `tk update <id> --claim`
 4. Add working notes: `tk update <id> --notes "context"`
-5. Close when done: `tk close <id> -c "summary"`
+5. Blocked? Follow "When you are blocked" under Writing tasks
+6. Close when done: `tk close <id> -c "summary"`
 
 ## Writing tasks
 
-Descriptions (`-d`), notes (`--notes`) and comments are markdown. The web UI renders them, so structure them for a human reader:
+Descriptions (`-d`), notes (`--notes`) and comments are markdown, rendered in the web UI.
+
+Write each description for the user, who reviews tasks in the web UI and makes decisions from them without your context. A good description lets them decide without opening the code.
 
 - Title: one short line, plain text, imperative ("Add OAuth login").
-- Description: why the task exists, then what "done" means as a checklist (`- [ ] ...`). Use `code` for paths, commands and identifiers, fenced blocks for snippets, and short headings for longer tasks.
-- Do not put the whole description on one line. Pass multi-line markdown with a quoted heredoc:
+- **Context**: why the task exists, what you found.
+- **Approach**: the plan, and rejected alternatives with a one-line reason, when relevant.
+- **Done when**: checklist (`- [ ] ...`).
+- **Open questions**: if any.
+- Use `code` for paths, commands and identifiers, fenced blocks for snippets.
+- Pass multi-line markdown with a quoted heredoc, never one long line:
 
   ```bash
   tk create "Add OAuth login" -p 1 -d "$(cat <<'EOF'
-  Users can only sign in with a password.
+  ## Context
+  Users can only sign in with a password; `src/auth.rs` has no provider hook.
+
+  ## Approach
+  Use the `oauth2` crate. Rejected: hand-rolled flow (more code, same result).
 
   ## Done when
   - [ ] Google OAuth button on `/login`
   - [ ] Tests in `tests/auth.rs`
+
+  ## Open questions
+  - Keep password login for existing users?
   EOF
   )"
   ```
+
+Keep the description current: when you learn something that changes the plan or scope, run `tk update <id> -d ...`. It replaces the whole description, so pass the full text (read it first with `tk show <id> --json`). Notes (`--notes`) are for short-lived working state; decisions and findings go in the description.
+
+### When you are blocked
+
+This is the most important case. The user cannot help unless the task tells them what you need.
+
+1. `tk update <id> -s blocked`
+2. Add a `## Blocked` section at the top of the description (full text, see above) with: what blocks you (be specific: error, missing access, unclear requirement), what you already tried, the decision you need from the user, the options with their trade-offs, and your recommendation.
+3. Tell the user in the session too, then stop working on that task.
+
+The user answers by commenting on the task. Act on the comment, remove or update the `## Blocked` section, and set the status back to `in_progress`.
+
+```markdown
+## Blocked
+**Blocker:** the `tasks.due` migration fails on prod-sized data: `ALTER TABLE` locks the table for ~40s.
+**Tried:** a local run on a 2M-row copy; adding the column as nullable (same lock).
+
+**Decision needed:** which migration strategy?
+- A. In-place `ALTER TABLE` in a maintenance window. Simple, but ~40s of downtime.
+- B. Shadow table plus backfill, then swap. No downtime, about a day more work.
+
+**Recommendation:** B. The table is written all day, so 40s of downtime fails requests.
+```
 
 ## User feedback
 
@@ -126,5 +164,7 @@ mod tests {
     fn test_rules_describe_markdown_writing() {
         assert!(RULES_CONTENT.contains("## Writing tasks"));
         assert!(RULES_CONTENT.contains("markdown"));
+        assert!(RULES_CONTENT.contains("## Blocked"));
+        assert!(RULES_CONTENT.contains("recommendation"));
     }
 }
