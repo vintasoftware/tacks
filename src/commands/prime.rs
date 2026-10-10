@@ -7,7 +7,7 @@ use crate::scope::{Scope, ScopeMode};
 const READY_LIMIT: u32 = 5;
 
 const COMMAND_REFERENCE: &[&str] = &[
-    "tk create <title> [-p priority] [-d desc] [-t tags] [--parent id]",
+    "tk create <title> [-p priority] [-d markdown] [-t tags] [--parent id]",
     "tk list [-s status] [-p pri] [-t tag] [--json]",
     "tk ready [--limit N] [--json]",
     "tk show <id> [--json]",
@@ -15,6 +15,7 @@ const COMMAND_REFERENCE: &[&str] = &[
     "tk close <id> [-c comment] (refused while user comments are unanswered)",
     "tk dep add|remove <child> <parent>",
     "tk comment <id> <body> (reply to user feedback with it)",
+    "Descriptions, notes and comments are markdown (rendered in the web UI): use checklists, code spans and multi-line text via heredoc",
     "tk stats [--oneline] [--json]",
     "tk workspaces [--json]",
     "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen (reads only; do not use it for writes unless the user asked)",

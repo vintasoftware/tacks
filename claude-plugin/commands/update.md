@@ -22,7 +22,7 @@ tk update <id> [--title <title>] [--priority <n>] [--status <status>]
 | `--tags <tags>` | Replace tags with comma-separated list |
 | `--assignee <name>` | Assign to a person or agent |
 | `--claim` | Set status to `in_progress` and assignee to current user |
-| `--notes <text>` | Set mutable working notes (overwrites previous notes) |
+| `--notes <text>` | Set mutable working notes, as markdown (overwrites previous notes) |
 | `--parent <id>` | Move task under a parent/epic |
 | `--parent none` | Promote subtask to top-level task |
 | `--move-to <path>` | Move the task and its subtasks to another workspace (worktree path); `none` makes it unscoped |
@@ -64,5 +64,6 @@ tk update tk-c3d4.1 --parent none
 - `--notes` **overwrites** previous notes — it is mutable working context, not a log. Use `tk comment` to append to the activity log instead.
 - `--move-to` registers the target workspace if it is new; see `/tacks:workspaces` for listing workspaces.
 - `update` only works on tasks of the current workspace (for `--parent`, both tasks; for `--move-to`, the task being moved). A task elsewhere fails with an error naming its workspace. Do not rerun with `--scope project|all`, and do not use `--move-to`, `--workspace` or `TACKS_WORKSPACE`, unless the user explicitly asked for that task or workspace; otherwise tell the user.
+- Descriptions and notes are markdown; the web UI renders them. Use checklists, `code` spans and multi-line text.
 - Multiple flags can be combined in a single `tk update` call.
 - Use `--json` to parse the updated task back.

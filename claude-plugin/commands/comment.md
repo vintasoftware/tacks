@@ -31,6 +31,7 @@ tk comment tk-a1b2 "Blocked on upstream API change in service B — waiting for 
 
 ## Notes
 
+- The body is markdown; the web UI renders it (code spans, lists, fenced blocks).
 - Comments are **append-only** — they cannot be edited or deleted. Use them for permanent activity log entries.
 - For mutable working context (notes you want to update as you go), use `tk update --notes "<text>"` instead.
 - Comments are recorded with author `agent` by default. `--author <name>` sets another author (free text); the author `user` marks a comment as user feedback, which the web UI uses. Never set `--author user` yourself: it is reserved for the human user, and faking it would create bogus feedback. The author is trimmed, must be non-empty and at most 64 characters.

@@ -10,7 +10,7 @@ Run `tk prime` at the start of each session to get context: backlog stats, in-pr
 ## Command Reference
 
 ```
-tk create <title> [-p priority] [-d desc] [-t tags] [--parent id]
+tk create <title> [-p priority] [-d markdown] [-t tags] [--parent id]
 tk list [-s status] [-p pri] [-t tag] [--parent id]
 tk ready [--limit N]
 tk show <id>
@@ -28,7 +28,8 @@ tk workspaces
 
 All commands support `--json` for machine-readable output.
 
-Tasks are scoped automatically to the current git worktree (workspace) in one global database (`~/.tacks/tacks.db`). 
+Tasks are scoped automatically to the current git worktree (workspace) in one global database (`~/.tacks/tacks.db`).
+
 ## Workspace boundaries
 
 - Work only on tasks of your current workspace. Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks of other workspaces.
@@ -43,6 +44,25 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 3. Claim it: `tk update <id> --claim`
 4. Add working notes: `tk update <id> --notes "context"`
 5. Close when done: `tk close <id> -c "summary"`
+
+## Writing tasks
+
+Descriptions (`-d`), notes (`--notes`) and comments are markdown. The web UI renders them, so structure them for a human reader:
+
+- Title: one short line, plain text, imperative ("Add OAuth login").
+- Description: why the task exists, then what "done" means as a checklist (`- [ ] ...`). Use `code` for paths, commands and identifiers, fenced blocks for snippets, and short headings for longer tasks.
+- Do not put the whole description on one line. Pass multi-line markdown with a quoted heredoc:
+
+  ```bash
+  tk create "Add OAuth login" -p 1 -d "$(cat <<'EOF'
+  Users can only sign in with a password.
+
+  ## Done when
+  - [ ] Google OAuth button on `/login`
+  - [ ] Tests in `tests/auth.rs`
+  EOF
+  )"
+  ```
 
 ## User feedback
 
@@ -96,4 +116,15 @@ pub fn run(global: bool) -> Result<(), String> {
     println!("  - Conventions (IDs, priorities, statuses, tags)");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RULES_CONTENT;
+
+    #[test]
+    fn test_rules_describe_markdown_writing() {
+        assert!(RULES_CONTENT.contains("## Writing tasks"));
+        assert!(RULES_CONTENT.contains("markdown"));
+    }
 }

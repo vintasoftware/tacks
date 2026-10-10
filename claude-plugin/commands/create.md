@@ -14,8 +14,8 @@ tk create "Title" [-p <priority>] [-d <description>] [-t <tags>] [--parent <id>]
 
 | Flag | Description |
 |------|-------------|
-| `-p <priority>` | Priority level (1 = highest). Default: 3 |
-| `-d <description>` | Longer description for the task |
+| `-p <priority>` | Priority level (0 = critical … 4 = trivial). Default: 2 |
+| `-d <description>` | Longer description for the task, as markdown (rendered in the web UI) |
 | `-t <tags>` | Comma-separated tags (e.g., `backend,api`) |
 | `--parent <id>` | Parent task ID — makes this a subtask (e.g., `tk-a1b2`) |
 
@@ -34,6 +34,16 @@ tk create "Fix login bug" --json
 
 # Create a P1 task with tags
 tk create "Add OAuth support" -p 1 -t backend,auth --json
+
+# Multi-line markdown description via quoted heredoc
+tk create "Add OAuth login" -p 1 -d "$(cat <<'EOF'
+Users can only sign in with a password.
+
+## Done when
+- [ ] Google OAuth button on `/login`
+- [ ] Tests in `tests/auth.rs`
+EOF
+)" --json
 
 # Create a subtask under an epic
 tk create "Write unit tests" --parent tk-a1b2 --json

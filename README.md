@@ -207,6 +207,7 @@ Tacks is built to be consumed by AI coding agents like Claude Code:
 
 - **Priority**: 0-4 (0 = critical, 4 = backlog)
 - **Close reasons**: `done`, `duplicate`, `absorbed`, `stale`, `superseded`
+- **Markdown**: descriptions, notes and comments are markdown; the web UI renders them.
 - **Notes vs comments**: Notes are mutable working context (overwritten). Comments are append-only history.
 - **Close guard**: Can't close a task with open subtasks unless you use `--force`
 - **Tags over types**: Epic, bug, etc. are tags, not a type system. The `epic` tag is auto-added when you create a subtask.

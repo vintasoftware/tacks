@@ -51,7 +51,7 @@ enum Commands {
         /// Priority (0=critical, 1=high, 2=medium, 3=low)
         #[arg(short, long, default_value_t = 2)]
         priority: u8,
-        /// Task description
+        /// Task description (markdown)
         #[arg(short, long)]
         description: Option<String>,
         /// Tags (comma-separated)
@@ -111,7 +111,7 @@ enum Commands {
         /// New status (open, in_progress, done, blocked)
         #[arg(short, long)]
         status: Option<String>,
-        /// New description
+        /// New description (markdown)
         #[arg(short, long)]
         description: Option<String>,
         /// Claim task (set assignee + in_progress)
@@ -126,7 +126,7 @@ enum Commands {
         /// Tags to remove (comma-separated)
         #[arg(long)]
         remove_tags: Option<String>,
-        /// Working notes (overwrites previous value)
+        /// Working notes, markdown (overwrites previous value)
         #[arg(long)]
         notes: Option<String>,
         /// Move task under a parent (reparent). Use "none" to promote to top-level.
@@ -167,7 +167,7 @@ enum Commands {
     Comment {
         /// Task ID
         id: String,
-        /// Comment text
+        /// Comment text (markdown)
         body: String,
         /// Comment author (default: agent). "user" marks it as user feedback
         #[arg(long)]
