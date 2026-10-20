@@ -72,7 +72,7 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
     pub close_reason: Option<String>,
     pub notes: Option<String>,
-    /// Workspace this task belongs to; `None` means the unscoped bucket.
+    /// Workspace this task belongs to; `None` means the project backlog (with `project_id`) or the unscoped bucket.
     pub workspace_id: Option<i64>,
     /// Project this task belongs to. Set for workspace tasks (the workspace's project) and
     /// for project backlog tasks (`workspace_id` is `None`); `None` means unscoped.

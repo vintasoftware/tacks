@@ -5,12 +5,14 @@ Tacks has downstream consumers (e.g., Tackline) that depend on its CLI interface
 ## What Is Stable
 
 - **CLI commands**: All subcommands (init, create, list, ready, show, update, close, dep, comment, stats, prime, children, epic, blocked, workspaces) and their flags
-- **JSON output schema**: The Task struct (13 fields, including nullable workspace_id), the workspace object of show --json (id, name, path, project_id, project_name, missing; or null), Comment, Dependency, Status enum (open/in_progress/done/blocked), CloseReason values (done/duplicate/absorbed/stale/superseded)
-- **Global flags**: `--json`, `--db`, `--workspace`, `--scope` (workspace|project|all)
+- **JSON output schema**: The Task struct (14 fields, including nullable workspace_id and project_id), the workspace object of show --json (id, name, path, project_id, project_name, missing; or null), the project object of show --json (id, name, path; or null), the backlog object of prime --json (project_id, open, in_progress, blocked; or null), Comment, Dependency, Status enum (open/in_progress/done/blocked), CloseReason values (done/duplicate/absorbed/stale/superseded)
+- **Global flags**: `--json`, `--db`, `--workspace`, `--scope` (workspace|backlog|project|all; `--scope project` includes the project backlog)
+- **Backlog flags**: `--to-backlog` on `create` and `update` (optional; conflicts with `--move-to`, `--claim` and `create --parent`), and the pull-in of `update --claim` on a backlog task
+- **`tk workspaces --json`**: unchanged by the backlog (no backlog rows); backlog counts are in `GET /api/backlogs`
 - **Exit codes**: 0 for success, 1 for error
 - **ID format**: `tk-XXXX` for tasks, `tk-XXXX.N` for subtasks
 - **Env vars**: `TACKS_DB` override for database path, `TACKS_WORKSPACE` explicit workspace path
-- **DB schema**: Existing tables (tasks, config, dependencies, comments, projects, workspaces) and their columns
+- **DB schema**: Existing tables (tasks, config, dependencies, comments, projects, workspaces) and their columns, including `tasks.project_id` (nullable: workspace tasks carry their workspace's project, backlog tasks have it with `workspace_id` NULL, unscoped tasks have neither)
 
 ## Rules
 

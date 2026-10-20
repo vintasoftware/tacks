@@ -80,6 +80,10 @@ tk list --scope project              # tasks of every worktree of this repositor
 tk list --scope all                  # every task in the database
 tk workspaces                        # projects and workspaces with task counts
 tk update <id> --move-to ../other-worktree   # move a task (and its subtasks)
+
+tk create "Later" --to-backlog       # park a task in the project backlog (no workspace)
+tk list --scope backlog              # the project backlog
+tk update <id> --claim --scope backlog   # take a backlog task into this worktree
 ```
 
 Use `tk init --prefix <prefix>` only to change the task ID prefix. The prefix applies to the whole global database.
@@ -89,11 +93,11 @@ Use `tk init --prefix <prefix>` only to change the task ID prefix. The prefix ap
 | Command | Description |
 |---------|-------------|
 | `tk init` | Initialize the tacks database (global by default, `~/.tacks/tacks.db`) |
-| `tk create <title>` | Create a task (`-p` priority, `-d` description, `-t` tags, `--parent` subtask; sets the current workspace) |
+| `tk create <title>` | Create a task (`-p` priority, `-d` description, `-t` tags, `--parent` subtask, `--to-backlog` project backlog; sets the current workspace) |
 | `tk list` | List open tasks (`-a` all, `-s` status, `-p` priority, `-t` tag, `--parent` filter) |
 | `tk ready` | Show tasks with no open blockers (`--limit N`) |
 | `tk show <id>` | Task details with blockers, dependents, comments, notes |
-| `tk update <id>` | Update fields (`--claim`, `--notes`, `--parent`, `--move-to <path|none>`, `-d`, `-p`, `-t`, `-s`) |
+| `tk update <id>` | Update fields (`--claim`, `--notes`, `--parent`, `--move-to <path|none>`, `--to-backlog`, `-d`, `-p`, `-t`, `-s`) |
 | `tk close <id>` | Close a task (`-c` comment, `-r` reason, `--force` to bypass subtask guard) |
 | `tk dep add <child> <parent>` | Add a dependency (cycle-checked) |
 | `tk dep remove <child> <parent>` | Remove a dependency |
@@ -109,7 +113,7 @@ Use `tk init --prefix <prefix>` only to change the task ID prefix. The prefix ap
 
 All commands support `--json` for machine-readable output.
 
-Global flags: `--db <path>` (`TACKS_DB`), `--workspace <path>` (`TACKS_WORKSPACE`), `--scope workspace|project|all` (default `workspace`).
+Global flags: `--db <path>` (`TACKS_DB`), `--workspace <path>` (`TACKS_WORKSPACE`), `--scope workspace|backlog|project|all` (default `workspace`).
 
 ## Web UI
 
@@ -120,15 +124,16 @@ tk serve              # http://localhost:3000
 tk serve --port 8080  # custom port
 ```
 
-The sidebar shows **All**, then each project with its workspaces. The scope is in the URL:
+The sidebar shows **All**, then each project with its **Backlog** and its workspaces. The scope is in the URL:
 
 | URL | Shows |
 |-----|-------|
 | `/board`, `/tasks`, `/epics` | All projects |
-| `/p/<project-id>/board` | Every workspace of one project |
+| `/p/<project-id>/board` | Every workspace of one project, plus its backlog |
+| `/p/<project-id>/backlog/board` | The backlog of one project |
 | `/p/<project-id>/w/<workspace-id>/board` | One workspace |
 
-A workspace whose directory was deleted shows a "missing" marker. Its tasks stay in the project, and you can move them to another workspace from the task detail.
+A workspace whose directory was deleted shows a "missing" marker. Its tasks stay in the project, and you can move them to another workspace or to the project backlog from the task detail (or all its open tasks at once with "Move open tasks to backlog").
 
 Comments you add in the task detail are user feedback that agents must answer before closing the task (see `docs/user-feedback.md`). The server sanitizes rendered markdown and rejects cross-origin writes and non-loopback `Host` headers (see `docs/web-security.md`).
 
@@ -187,7 +192,7 @@ claude --plugin-dir ./claude-plugin
 - **Slash commands** for all `tk` operations: `/tacks:create`, `/tacks:list`, `/tacks:ready`, `/tacks:show`, `/tacks:update`, `/tacks:close`, `/tacks:dep`, `/tacks:comment`, `/tacks:children`, `/tacks:epic`, `/tacks:blocked`, `/tacks:stats`, `/tacks:prime`, `/tacks:init`, `/tacks:workspaces`
 - **SessionStart hook** that auto-loads backlog context via `tk prime` for the current workspace (silent in workspaces that have no tasks; install the rules file too, see [Set up your agents](#set-up-your-agents-claude-code))
 - **PreCompact hook** that re-runs `tk prime` before context compaction to preserve backlog state
-- **PreToolUse hook** that asks you to confirm any Bash `tk` command reaching outside the current workspace (`--scope project|all`, `--workspace`, `--move-to`, `--db`, `TACKS_WORKSPACE`/`TACKS_DB`); see [workspace scoping](docs/workspace-scoping.md#agent-hook)
+- **PreToolUse hook** that asks you to confirm any Bash `tk` command reaching outside the current workspace (`--scope backlog|project|all`, `--workspace`, `--move-to`, `--db`, `TACKS_WORKSPACE`/`TACKS_DB`); see [workspace scoping](docs/workspace-scoping.md#agent-hook)
 - **PostToolUse hook** that delivers unanswered user comments (written in the web UI) into the running session; see [user feedback](docs/user-feedback.md)
 - **Task agent** (`@task-agent`) for autonomous work discovery: finds ready tasks, claims them, executes, files discoveries, and closes on completion
 
@@ -234,10 +239,11 @@ Tacks uses SQLite (bundled, no system dependency) in one global database at `~/.
 
 Tasks are scoped per git worktree ("workspace"); worktrees of the same repository form a "project". The workspace comes from `--workspace` / `TACKS_WORKSPACE`, else `git rev-parse --show-toplevel` from the current directory, else the "unscoped" bucket (existing tasks and tasks created outside a repo).
 
-- `list`, `ready`, `blocked`, `epic`, `stats`, `prime` show the current workspace only. Use `--scope project` for every workspace of the repository, `--scope all` for everything. (`list -a` still means "include closed".)
+- `list`, `ready`, `blocked`, `epic`, `stats`, `prime` show the current workspace only. Use `--scope backlog` for the project backlog, `--scope project` for every workspace of the repository plus its backlog, `--scope all` for everything. (`list -a` still means "include closed".)
 - `create` records the current workspace; subtasks inherit the parent's workspace.
-- Write guard: `update`, `close`, `comment`, `dep add|remove` and `create --parent` refuse (exit 1) tasks outside the current workspace, so agents stay in their lane. `--scope project|all` lifts the guard; use it only when asked. `show` and `children` read any task, and the web UI/API are unrestricted.
+- Write guard: `update`, `close`, `comment`, `dep add|remove` and `create --parent` refuse (exit 1) tasks outside the current workspace, so agents stay in their lane. `--scope backlog|project|all` widens the guard (`backlog` allows only the project's backlog tasks); use it only when asked. `show` and `children` read any task, and the web UI/API are unrestricted.
 - `tk update <id> --move-to <path|none>` moves a task and its subtasks to another workspace (or the unscoped bucket).
+- Project backlog: tasks of a project that belong to no workspace yet. `--to-backlog` (on `create` and `update`) parks a task there; agents use it for out-of-scope findings. `tk update <id> --claim --scope backlog` takes one into the current workspace. `tk prime` shows one backlog line.
 - `tk prime` is silent when the current workspace has never used tacks.
 
 See `docs/workspace-scoping.md` for details.
