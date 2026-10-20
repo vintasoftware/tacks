@@ -57,7 +57,13 @@
                     <span class="scope-crumb-sep" aria-hidden="true">/</span>
                     <strong class="scope-crumb-ws" title="{{ w.path }}">{{ w.name }}</strong>
                     {% else if let Some(pn) = h.project_name.as_deref() %}
+                    {% if h.backlog %}
+                    <span class="scope-crumb-project">{% if let Some(pp) = h.project_prefix.as_deref() %}<a href="{{ pp }}/board">{{ pn }}</a>{% else %}{{ pn }}{% endif %}</span>
+                    <span class="scope-crumb-sep" aria-hidden="true">/</span>
+                    <strong class="scope-crumb-ws">Backlog</strong>
+                    {% else %}
                     <strong class="scope-crumb-ws">{{ pn }}</strong>
+                    {% endif %}
                     {% else %}
                     <strong class="scope-crumb-ws">All projects</strong>
                     {% endif %}

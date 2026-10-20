@@ -39,8 +39,8 @@
 
   // --- Nav active tab highlight ---
 
-  // Scope prefix of the current URL: "", "/p/1" or "/p/1/w/2".
-  var SCOPE_PREFIX_RE = /^\/p\/\d+(?:\/w\/\d+)?(?=\/|$)/;
+  // Scope prefix of the current URL: "", "/p/1", "/p/1/backlog" or "/p/1/w/2".
+  var SCOPE_PREFIX_RE = /^\/p\/\d+(?:\/w\/\d+|\/backlog)?(?=\/|$)/;
 
   function stripScope(path) {
     return path.replace(SCOPE_PREFIX_RE, '') || '/';
@@ -143,6 +143,14 @@
     if (dlg && dlg.open) dlg.close();
   }
 
+  // Selector values: "" (none), a workspace id, or "backlog:<project id>".
+  // Returns the API fields for it: {workspace_id, project_id?}.
+  function placementFields(value) {
+    var m = /^backlog:(\d+)$/.exec(value || '');
+    if (m) return { workspace_id: null, project_id: parseInt(m[1], 10) };
+    return { workspace_id: value ? parseInt(value, 10) : null };
+  }
+
   function wsFailed(msg) {
     var confirm = document.getElementById('ws-dialog-confirm');
     if (confirm) {
@@ -188,6 +196,37 @@
             .then(function (res) {
               closeWsDialog();
               showToast('Closed ' + plural(res.closed, 'task', 'tasks'), 'success');
+              setTimeout(function () { window.location.reload(); }, 600);
+            });
+        }
+      });
+      if (n === 0) document.getElementById('ws-dialog-confirm').disabled = true;
+    }).catch(function () { showToast('Could not load workspace', 'error'); });
+  }
+
+  function openMoveToBacklogDialog(id, name) {
+    fetchWorkspace(id).then(function (ws) {
+      var n = ws.open_count;
+      var project = ws.project_name || 'its project';
+      openWsDialog({
+        title: 'Move ' + plural(n, 'open task', 'open tasks') + ' of ' + name + ' to the backlog?',
+        body: [
+          wsEl('p', n === 0
+            ? 'This workspace has no open tasks.'
+            : 'Open, in progress and blocked tasks (with their subtasks) leave this workspace and go to the backlog of project ' + project + '.'),
+          wsEl('p', 'Nothing is deleted. Tasks keep their status, comments and notes. Done tasks stay where they are, unless they are subtasks of a moved task.')
+        ],
+        confirm: n === 0 ? 'Nothing to move' : 'Move ' + plural(n, 'task', 'tasks'),
+        danger: false,
+        onConfirm: function () {
+          return postJson('/api/workspaces/' + encodeURIComponent(id) + '/move-open-to-backlog')
+            .then(function (r) {
+              if (!r.ok) throw new Error('move failed');
+              return r.json();
+            })
+            .then(function (res) {
+              closeWsDialog();
+              showToast('Moved ' + plural(res.moved, 'task', 'tasks') + ' to the backlog', 'success');
               setTimeout(function () { window.location.reload(); }, 600);
             });
         }
@@ -245,6 +284,8 @@
         var name = action.getAttribute('data-ws-name') || 'this workspace';
         if (action.getAttribute('data-ws-action') === 'close-all') {
           openCloseAllDialog(id, name);
+        } else if (action.getAttribute('data-ws-action') === 'move-open-to-backlog') {
+          openMoveToBacklogDialog(id, name);
         } else {
           openRemoveDialog(id, name, action.getAttribute('data-ws-next'));
         }
@@ -720,6 +761,8 @@
     var parentId = form.querySelector('[name="parent_id"]');
     var workspaceId = form.querySelector('[name="workspace_id"]');
 
+    var placement = placementFields(workspaceId ? workspaceId.value : '');
+
     // Parse tags: comma-separated string → array
     var tagsVal = tags && tags.value.trim() ? tags.value.split(',').map(function (t) { return t.trim(); }).filter(Boolean) : null;
 
@@ -732,8 +775,10 @@
       assignee: assignee && assignee.value.trim() ? assignee.value.trim() : null,
       parent_id: parentId && parentId.value ? parentId.value : null,
       // Subtasks inherit the parent's workspace server-side; workspace_id is ignored then.
-      workspace_id: workspaceId && workspaceId.value ? parseInt(workspaceId.value, 10) : null
+      // "backlog:<project id>" creates the task in that project's backlog (project_id).
+      workspace_id: placement.workspace_id
     };
+    if (placement.project_id !== undefined) body.project_id = placement.project_id;
 
     var submitBtn = form.querySelector('[type="submit"]');
     if (submitBtn) submitBtn.setAttribute('aria-busy', 'true');
@@ -1992,23 +2037,27 @@
   });
 
   // --- Move task to another workspace (task detail page / modal) ---
-  // PATCH /api/tasks/{id} with workspace_id (integer, or null for "none").
+  // PATCH /api/tasks/{id} with workspace_id (integer, or null for "none"), or
+  // workspace_id null plus project_id for a project's backlog ("backlog:<project id>").
   // The server moves the task together with all of its subtasks.
   document.addEventListener('change', function (e) {
     var sel = e.target;
     if (!sel || !sel.classList || !sel.classList.contains('workspace-move-select')) return;
     var taskId = sel.getAttribute('data-task-id');
-    var value = sel.value ? parseInt(sel.value, 10) : null;
+    var placement = placementFields(sel.value);
+    var moveBody = placement.project_id === undefined
+      ? { workspace_id: placement.workspace_id }
+      : { workspace_id: null, project_id: placement.project_id };
     sel.setAttribute('aria-busy', 'true');
     fetch('/api/tasks/' + encodeURIComponent(taskId), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace_id: value }),
+      body: JSON.stringify(moveBody),
     })
       .then(function (r) {
         sel.removeAttribute('aria-busy');
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        showToast('Workspace updated (subtasks moved too)', 'success', 2500);
+        showToast((placement.project_id === undefined ? 'Workspace' : 'Backlog') + ' updated (subtasks moved too)', 'success', 2500);
         if (sel.closest('dialog')) {
           htmx.ajax('GET', '/tasks/' + encodeURIComponent(taskId), { target: '#task-modal', swap: 'innerHTML' });
         } else {

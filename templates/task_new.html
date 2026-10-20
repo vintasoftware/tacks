@@ -23,9 +23,10 @@
   </label>
   <label for="workspace_id">workspace
     <select id="workspace_id" name="workspace_id">
-      <option value=""{% if default_workspace.is_none() %} selected{% endif %}>none (unscoped)</option>
+      <option value=""{% if default_workspace.is_none() && default_backlog.is_none() %} selected{% endif %}>none (unscoped)</option>
       {% for g in ws_groups.iter() %}
       <optgroup label="{{ g.project_name }}">
+        <option value="backlog:{{ g.project_id }}"{% if g.backlog_selected %} selected{% endif %}>Backlog</option>
         {% for o in g.options.iter() %}
         <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}>{{ o.name }}</option>
         {% endfor %}

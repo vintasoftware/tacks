@@ -12,6 +12,8 @@
 //! - `@workspace(A)` workspace id of the workspace whose path is "A"
 //! - `@project(A)`   project id of the workspace whose path is "A"
 //! - `@id(alias)`    task id saved under `alias`
+//! - `@taskproject(alias)` project id of the task saved under `alias` (works for projects
+//!   that only have backlog tasks and so own no registered workspace)
 #![allow(deprecated)]
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -155,7 +157,28 @@ fn row_for(world: &mut TacksWorld, alias: &str) -> Value {
         .unwrap_or_else(|| panic!("no registered workspace for '{alias}' ({path})"))
 }
 
-/// Replace `@path(..)`, `@workspace(..)`, `@project(..)` and `@id(..)` tokens.
+/// Project id of the task saved under `alias`, read through `tk show --json`.
+fn task_project_id(world: &mut TacksWorld, alias: &str) -> String {
+    let id = world
+        .task_ids
+        .get(alias)
+        .unwrap_or_else(|| panic!("no task saved as '{alias}'"))
+        .clone();
+    let root = fs_root(world);
+    let mut cmd = tk_command(world, &root);
+    let out = cmd
+        .args(["--json", "show", &id])
+        .output()
+        .expect("failed to run tk show");
+    let json: Value = serde_json::from_slice(&out.stdout).expect("show output is JSON");
+    assert!(
+        json["project_id"].is_i64(),
+        "task '{alias}' has no project: {json}"
+    );
+    json["project_id"].to_string()
+}
+
+/// Replace `@path(..)`, `@workspace(..)`, `@project(..)`, `@taskproject(..)` and `@id(..)` tokens.
 pub fn resolve(world: &mut TacksWorld, input: &str) -> String {
     let mut out = String::new();
     let mut rest = input;
@@ -165,8 +188,11 @@ pub fn resolve(world: &mut TacksWorld, input: &str) -> String {
         let parsed = after.find('(').and_then(|open| {
             let kind = &after[..open];
             let close = after[open..].find(')')? + open;
-            matches!(kind, "path" | "workspace" | "project" | "id")
-                .then(|| (kind, &after[open + 1..close], close))
+            matches!(
+                kind,
+                "path" | "workspace" | "project" | "taskproject" | "id"
+            )
+            .then(|| (kind, &after[open + 1..close], close))
         });
         match parsed {
             Some((kind, arg, close)) => {
@@ -178,6 +204,7 @@ pub fn resolve(world: &mut TacksWorld, input: &str) -> String {
                         .unwrap_or_else(|| panic!("no task saved as '{arg}'"))
                         .clone(),
                     "workspace" => row_for(world, arg)["workspace_id"].to_string(),
+                    "taskproject" => task_project_id(world, arg),
                     _ => row_for(world, arg)["project_id"].to_string(),
                 };
                 out.push_str(&value);

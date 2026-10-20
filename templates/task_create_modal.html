@@ -63,12 +63,17 @@
       <span class="form-label" id="create-workspace-label">Workspace</span>
       <input type="hidden" name="workspace_id" value="{{ w.id }}">
       <p class="ws-fixed" aria-labelledby="create-workspace-label"><span class="badge ws-badge">{{ w.name }}</span></p>
+      {% else if let Some(b) = fixed_backlog.as_ref() %}
+      <span class="form-label" id="create-workspace-label">Workspace</span>
+      <input type="hidden" name="workspace_id" value="backlog:{{ b.id }}">
+      <p class="ws-fixed" aria-labelledby="create-workspace-label"><span class="badge ws-badge ws-backlog-badge">backlog</span> <span class="muted">of project {{ b.name }}</span></p>
       {% else %}
       <label for="create-workspace">Workspace</label>
       <select id="create-workspace" name="workspace_id">
         <option value="">No workspace (unscoped)</option>
         {% for g in ws_groups.iter() %}
         <optgroup label="{{ g.project_name }}">
+          <option value="backlog:{{ g.project_id }}"{% if g.backlog_selected %} selected{% endif %}>Backlog</option>
           {% for o in g.options.iter() %}
           <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}>{{ o.name }}</option>
           {% endfor %}

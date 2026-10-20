@@ -171,9 +171,9 @@ async fn static_handler(AxumPath(path): AxumPath<String>) -> Response {
 }
 
 /// Register the scope-aware HTML views under `prefix`: `""` (all projects),
-/// `"/p/{project_id}"` (one project) and `"/p/{project_id}/w/{workspace_id}"` (one
-/// workspace). The same handlers serve all three; the `Scope` extractor reads the
-/// path parameters. Specific routes come before parameterized ones.
+/// `"/p/{project_id}"` (one project), `"/p/{project_id}/backlog"` (a project's backlog) and
+/// `"/p/{project_id}/w/{workspace_id}"` (one workspace). The same handlers serve all
+/// four; the `Scope` extractor reads the path parameters and the matched route. Specific routes come before parameterized ones.
 fn add_scoped_routes(router: Router<AppState>, prefix: &str) -> Router<AppState> {
     router
         .route(&format!("{prefix}/tasks/new"), get(handlers::task_new))
@@ -200,6 +200,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/", get(handlers::index));
     let router = add_scoped_routes(router, "");
     let router = add_scoped_routes(router, "/p/{project_id}");
+    let router = add_scoped_routes(router, "/p/{project_id}/backlog");
     let router = add_scoped_routes(router, "/p/{project_id}/w/{workspace_id}");
     router
         // Task detail and dep trees stay global (any task, whatever the scope)
@@ -218,6 +219,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tags", get(handlers::api_tags))
         .route("/api/epics", get(handlers::api_epics))
         .route("/api/workspaces", get(handlers::api_workspaces))
+        .route("/api/backlogs", get(handlers::api_backlogs))
         .route("/api/workspaces/{id}", get(handlers::api_get_workspace))
         .route(
             "/api/workspaces/{id}/archive",
@@ -230,6 +232,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/workspaces/{id}/close-all",
             post(handlers::api_close_all_workspace_tasks),
+        )
+        .route(
+            "/api/workspaces/{id}/move-open-to-backlog",
+            post(handlers::api_move_open_to_backlog),
         )
         .route("/api/prime", get(handlers::api_prime))
         .route(

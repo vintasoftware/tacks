@@ -1,5 +1,5 @@
 {% import "macros.html" as m %}
-{# Metadata definition list shared by task detail (page and modal) and epic detail. Needs: task, parent, ws, ws_groups, updated_rel. #}
+{# Metadata definition list shared by task detail (page and modal) and epic detail. Needs: task, parent, ws, backlog_project, ws_groups, updated_rel. #}
 <dl class="task-meta">
   <dt class="ro-field">Status</dt>
   <dd class="ro-field">{% call m::status_badge(task.status) %}</dd>
@@ -21,16 +21,20 @@
     {% if let Some(w) = ws.as_ref() %}
     <span class="ws-line"><span class="badge ws-badge{% if w.missing %} ws-missing{% endif %}">{{ w.name }}{% if w.missing %} · missing{% endif %}{% if w.archived %} · archived{% endif %}</span> <span class="ws-project ws-project-label">in project {{ w.project_name }}</span></span>
     <span class="ws-path" title="{{ w.path }}">{{ w.path }}</span>
-    {% if w.missing %}<span class="ws-missing-note">This workspace's path no longer exists. The task stays in its project; move it to another workspace if needed.</span>{% endif %}
+    {% if w.missing %}<span class="ws-missing-note">This workspace's path no longer exists. The task stays in its project; move it to another workspace if needed.</span>
+    <button type="button" class="ws-action ws-backlog-action secondary outline" data-ws-action="move-open-to-backlog" data-ws-id="{{ w.id }}" data-ws-name="{{ w.name }}" title="Moves the not-done tasks of workspace {{ w.name }} (with their subtasks) to the backlog of project {{ w.project_name }}">Move open tasks to backlog</button>{% endif %}
+    {% else if let Some(bp) = backlog_project.as_ref() %}
+    <span class="muted ws-none ws-backlog">none (backlog of project {{ bp }})</span>
     {% else %}
     <span class="muted ws-none">none</span>
     {% endif %}
     {% if !ws_groups.is_empty() %}
     <span class="ws-move">
       <select class="workspace-move-select" data-task-id="{{ task.id }}" aria-label="Move to workspace" title="Changing the workspace moves this task and all of its subtasks.">
-        <option value=""{% if ws.is_none() %} selected{% endif %}>Move to… (none, unscoped)</option>
+        <option value=""{% if ws.is_none() && backlog_project.is_none() %} selected{% endif %}>Move to… (none, unscoped)</option>
         {% for g in ws_groups.iter() %}
         <optgroup label="{{ g.project_name }}">
+          <option value="backlog:{{ g.project_id }}"{% if g.backlog_selected %} selected{% endif %}>Backlog</option>
           {% for o in g.options.iter() %}
           <option value="{{ o.id }}"{% if o.selected %} selected{% endif %}{% if o.disabled %} disabled{% endif %}>{{ o.name }}{% if o.missing %} (missing){% endif %}{% if o.archived %} (archived){% endif %}</option>
           {% endfor %}

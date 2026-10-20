@@ -1,4 +1,5 @@
 {% macro ws_badge(ws) %}<span class="badge ws-badge{% if ws.missing %} ws-missing{% endif %}" title="{{ ws.project_name }}: {{ ws.path }}{% if ws.missing %} (path no longer exists){% endif %}">{{ ws.name }}{% if ws.missing %} · missing{% endif %}{% if ws.archived %} · archived{% endif %}</span>{% endmacro %}
+{% macro backlog_badge(project_name) %}<span class="badge ws-badge ws-backlog-badge" title="Backlog of project {{ project_name }}">backlog</span>{% endmacro %}
 {% macro priority_badge(p) %}<span class="badge priority-{{ p }}">{%- if p == 0 -%}▲▲ P0{%- else if p == 1 -%}▲ P1{%- else if p == 2 -%}▬ P2{%- else if p == 3 -%}▽ P3{%- else -%}· P4{%- endif -%}</span>{% endmacro %}
 
 {% macro pending_badge(n) %}<span class="pending-comments" title="{{ n }} user comment{% if n != 1 %}s{% endif %} awaiting agent reply" aria-label="{{ n }} user comment{% if n != 1 %}s{% endif %} awaiting agent reply">💬 {{ n }}</span>{% endmacro %}
@@ -24,7 +25,7 @@
     <span class="task-id">{{ row.task.id }}</span>
     {% call priority_badge(row.task.priority) %}
     {% if let Some(a) = row.task.assignee.as_deref() %}<span class="card-assignee" title="Assignee">{{ a }}</span>{% endif %}
-    {% if let Some(ws) = row.workspace.as_ref() %}{% call ws_badge(ws) %}{% endif %}
+    {% if let Some(ws) = row.workspace.as_ref() %}{% call ws_badge(ws) %}{% else if let Some(bp) = row.backlog.as_deref() %}{% call backlog_badge(bp) %}{% endif %}
     {% if row.pending_count > 0 %}{% call pending_badge(row.pending_count) %}{% endif %}
     {% call blocked_chip(row) %}
   </div>

@@ -2012,6 +2012,19 @@ main.view-epics {
   color: var(--pico-del-color, #b91c1c);
 }
 
+.ws-badge.ws-backlog-badge {
+  border-style: dotted;
+  font-style: italic;
+}
+
+.ws-backlog-action {
+  width: auto;
+  margin: 0;
+  padding: 0 0.5rem;
+  min-height: 1.75rem;
+  font-size: 0.75rem;
+}
+
 .ws-project-label { color: var(--pico-muted-color, #6b7280); font-size: 0.875em; }
 
 .task-workspace {

@@ -12,7 +12,7 @@ use crate::models::{Comment, Task, validate_close_reason};
 use crate::web::AppState;
 use crate::web::errors::AppError;
 use crate::web::render_markdown;
-use crate::web::scope::{ApiScope, Layout, Scope, WsGroup, WsInfo};
+use crate::web::scope::{ApiScope, Layout, ProjectInfo, Scope, WsGroup, WsInfo};
 
 /// Render an askama template into an axum HTML response.
 fn render_template<T: Template>(template: T) -> Response {
@@ -46,6 +46,10 @@ pub struct CreateTaskBody {
     pub parent_id: Option<String>,
     /// Workspace to create the task in. Ignored for subtasks (they inherit the parent's).
     pub workspace_id: Option<i64>,
+    /// Without `workspace_id`: create the task in the backlog of this project (404 when the
+    /// project is unknown). With `workspace_id`: must be that workspace's project (400
+    /// otherwise). Ignored for subtasks.
+    pub project_id: Option<i64>,
 }
 
 /// Request body for PATCH /api/tasks/:id.
@@ -64,6 +68,10 @@ pub struct UpdateTaskBody {
     /// unscoped bucket; absent leaves the workspace unchanged.
     #[serde(default, deserialize_with = "deserialize_present_or_null")]
     pub workspace_id: Option<Option<i64>>,
+    /// With `workspace_id: null`: move the task (and subtasks) to the backlog of this
+    /// project (404 when unknown). With `workspace_id` set: must be that workspace's project
+    /// (400 otherwise). Without `workspace_id`: 400.
+    pub project_id: Option<i64>,
 }
 
 /// Deserialize a field so that "absent" (via `serde(default)`) stays `None`, an explicit
@@ -174,7 +182,45 @@ pub struct StatsResponse {
 // API handlers
 // ---------------------------------------------------------------------------
 
-/// POST /api/tasks — Create a new task (201).
+/// Validate the placement of a new top-level task and return the project of its backlog.
+///
+/// - `workspace_id` set: the workspace must exist (404); `project_id`, when given, must be
+///   its project (400). The task is not a backlog task (`None`).
+/// - `workspace_id` absent and `project_id` set: the project must exist (404); the task goes
+///   to that project's backlog (`Some(project)`).
+/// - Neither: unscoped (`None`).
+fn check_new_placement(
+    db: &crate::db::Database,
+    workspace_id: Option<i64>,
+    project_id: Option<i64>,
+) -> Result<Option<i64>, AppError> {
+    match (workspace_id, project_id) {
+        (Some(ws), project) => {
+            let w = db
+                .get_workspace(ws)
+                .map_err(AppError::Internal)?
+                .ok_or_else(|| AppError::NotFound(format!("workspace not found: {ws}")))?;
+            if let Some(p) = project
+                && p != w.project_id
+            {
+                return Err(AppError::BadRequest(format!(
+                    "project_id {p} does not match the project of workspace {ws}"
+                )));
+            }
+            Ok(None)
+        }
+        (None, Some(p)) => {
+            db.get_project(p)
+                .map_err(AppError::Internal)?
+                .ok_or_else(|| AppError::NotFound(format!("project not found: {p}")))?;
+            Ok(Some(p))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+/// POST /api/tasks — Create a new task (201). `workspace_id` places it in a workspace;
+/// `project_id` without `workspace_id` places it in that project's backlog.
 pub async fn api_create_task(
     State(state): State<AppState>,
     Json(body): Json<CreateTaskBody>,
@@ -197,31 +243,31 @@ pub async fn api_create_task(
     let tags = body.tags.clone().unwrap_or_default();
     let parent_id = body.parent_id.clone();
     let requested_workspace = body.workspace_id;
+    let requested_project = body.project_id;
 
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Task, AppError> {
         let db = db.lock().unwrap();
 
-        // Generate ID; subtasks inherit the parent's workspace
-        let (id, workspace_id) = if let Some(ref pid) = parent_id {
+        // Generate ID; subtasks inherit the parent's workspace (or backlog)
+        let (id, workspace_id, backlog_project) = if let Some(ref pid) = parent_id {
             // Verify parent exists
             let parent = db
                 .get_task(pid)
                 .map_err(AppError::Internal)?
                 .ok_or_else(|| AppError::NotFound(format!("parent task not found: {pid}")))?;
+            // `insert_task` gives a subtask of a backlog parent the parent's project.
             (
                 db.generate_child_id(pid).map_err(AppError::Internal)?,
                 parent.workspace_id,
+                None,
             )
         } else {
-            if let Some(ws) = requested_workspace
-                && db.get_workspace(ws).map_err(AppError::Internal)?.is_none()
-            {
-                return Err(AppError::NotFound(format!("workspace not found: {ws}")));
-            }
+            let backlog_project = check_new_placement(&db, requested_workspace, requested_project)?;
             (
                 db.generate_id().map_err(AppError::Internal)?,
                 requested_workspace,
+                backlog_project,
             )
         };
 
@@ -240,10 +286,11 @@ pub async fn api_create_task(
             close_reason: None,
             notes: None,
             workspace_id,
-            project_id: None,
+            project_id: backlog_project,
         };
 
         db.insert_task(&task).map_err(AppError::Internal)?;
+        let id = task.id.clone();
 
         // Auto-tag parent as epic when a child is created, and sync epic status
         if let Some(ref pid) = parent_id {
@@ -256,7 +303,11 @@ pub async fn api_create_task(
             db.sync_epic_status(pid).map_err(AppError::Internal)?;
         }
 
-        Ok(task)
+        // Re-read so the response carries the stored `project_id` (derived from the
+        // workspace, the backlog or the parent).
+        db.get_task(&id)
+            .map_err(AppError::Internal)?
+            .ok_or_else(|| AppError::Internal(format!("task not found after create: {id}")))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
@@ -453,7 +504,12 @@ pub async fn api_show_task(
     }
 }
 
+/// Marks an error string of the update closure (which can only return `String`) as a 400.
+const BAD_REQUEST_PREFIX: &str = "bad request: ";
+
 /// PATCH /api/tasks/:id — Update task fields (200, 400 for invalid input, or 404).
+/// `workspace_id` moves the task and its subtasks; `workspace_id: null` with `project_id`
+/// moves them to that project's backlog.
 pub async fn api_update_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -473,10 +529,28 @@ pub async fn api_update_task(
             .ok_or_else(|| format!("task not found: {id}"))?;
 
         // Validate everything that can be checked up front, so a bad request changes nothing.
-        if let Some(Some(ws)) = body.workspace_id
-            && db.get_workspace(ws)?.is_none()
-        {
-            return Err(format!("workspace not found: {ws}"));
+        match (body.workspace_id, body.project_id) {
+            (None, Some(_)) => {
+                return Err(format!(
+                    "{BAD_REQUEST_PREFIX}project_id requires workspace_id (null for the backlog)"
+                ));
+            }
+            (Some(Some(ws)), project) => {
+                let w = db
+                    .get_workspace(ws)?
+                    .ok_or_else(|| format!("workspace not found: {ws}"))?;
+                if let Some(p) = project
+                    && p != w.project_id
+                {
+                    return Err(format!(
+                        "{BAD_REQUEST_PREFIX}project_id {p} does not match the project of workspace {ws}"
+                    ));
+                }
+            }
+            (Some(None), Some(p)) if db.get_project(p)?.is_none() => {
+                return Err(format!("project not found: {p}"));
+            }
+            _ => {}
         }
         if let Some(ref s) = body.status {
             s.parse::<crate::models::Status>()?;
@@ -519,8 +593,14 @@ pub async fn api_update_task(
                 db.sync_epic_status(pid)?;
             }
 
-            if let Some(ws) = body.workspace_id {
-                db.set_task_workspace(&id, ws)?;
+            match (body.workspace_id, body.project_id) {
+                (Some(None), Some(p)) => {
+                    db.move_task_to_backlog(&id, p)?;
+                }
+                (Some(ws), _) => {
+                    db.set_task_workspace(&id, ws)?;
+                }
+                (None, _) => {}
             }
             Ok(())
         })?;
@@ -534,6 +614,9 @@ pub async fn api_update_task(
 
     match result {
         Ok(task) => Ok(Json(task)),
+        Err(e) if e.starts_with(BAD_REQUEST_PREFIX) => Err(AppError::BadRequest(
+            e[BAD_REQUEST_PREFIX.len()..].to_string(),
+        )),
         Err(e) if e.starts_with("cannot reparent") || e.starts_with("circular parenting") => {
             Err(AppError::BadRequest(e))
         }
@@ -982,6 +1065,67 @@ pub async fn api_close_all_workspace_tasks(
     Ok(Json(serde_json::json!({ "closed": closed })))
 }
 
+/// POST /api/workspaces/:id/move-open-to-backlog — Move every not-done task of the
+/// workspace, with its subtasks, to the backlog of the workspace's project (200 with
+/// `{"moved": N, "project_id": P}`, 404). Nothing is deleted; done tasks stay unless they are
+/// subtasks of a moved task. One transaction; repeating the call moves nothing (`moved: 0`).
+/// `moved` counts every task whose placement changed, subtasks included. The request body
+/// is ignored. Protected like the other workspace actions by the host/origin guard
+/// (`security::guard`).
+pub async fn api_move_open_to_backlog(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let id = workspace_path_id(&id)?;
+    let db = state.db.clone();
+    let (moved, project_id) =
+        tokio::task::spawn_blocking(move || -> Result<(usize, i64), String> {
+            let db = db.lock().unwrap();
+            let ws = db
+                .get_workspace(id)?
+                .ok_or_else(|| format!("workspace not found: {id}"))?;
+            let open = db.list_tasks(
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &crate::db::ScopeFilter::Workspace(id),
+            )?;
+            let moved = db.with_savepoint(|| {
+                let mut moved = 0;
+                for t in &open {
+                    moved += db.move_task_to_backlog(&t.id, ws.project_id)?;
+                }
+                Ok(moved)
+            })?;
+            Ok((moved, ws.project_id))
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(workspace_db_error)?;
+    Ok(Json(
+        serde_json::json!({ "moved": moved, "project_id": project_id }),
+    ))
+}
+
+/// GET /api/backlogs — Task counts of the backlog of every project that has backlog tasks
+/// (200): `[{project_id, project_name, open, in_progress, blocked, done}]`. Separate from
+/// `GET /api/workspaces`, whose rows are workspaces (and the unscoped bucket) only.
+pub async fn api_backlogs(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let db = state.db.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        let db = db.lock().unwrap();
+        crate::workspace_overview::backlog_rows(&db)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(AppError::Internal)?;
+    Ok(Json(rows))
+}
+
 /// GET /api/poll — Lightweight change-detection endpoint for HTMX polling.
 ///
 /// Compares the current SQLite `PRAGMA data_version` against the last known value
@@ -1043,6 +1187,9 @@ struct TaskRow {
     updated_abs: String,
     /// Workspace of the task, set only in project and All scopes (shown as a badge).
     workspace: Option<WsInfo>,
+    /// Project name when the task is in a project backlog; set only in project and All
+    /// scopes, where it shows a "backlog" badge in place of the workspace badge.
+    backlog: Option<String>,
     /// Number of user comments awaiting an agent reply.
     pending_count: i64,
 }
@@ -1077,6 +1224,7 @@ impl TaskRow {
             updated_rel,
             updated_abs,
             workspace: None,
+            backlog: None,
             pending_count: 0,
         }
     }
@@ -1087,10 +1235,11 @@ impl TaskRow {
         self
     }
 
-    /// Attach the workspace badge data when the scope shows badges.
+    /// Attach the workspace (or backlog) badge data when the scope shows badges.
     fn with_workspace(mut self, scope: &Scope) -> Self {
         if scope.show_workspace_badge() {
             self.workspace = self.task.workspace_id.and_then(|id| scope.ws(id)).cloned();
+            self.backlog = scope.backlog_project_of(&self.task).map(|(_, name)| name);
         }
         self
     }
@@ -1276,6 +1425,8 @@ struct TaskDetailTemplate {
     layout: Layout,
     /// Workspace of the task, if any.
     ws: Option<WsInfo>,
+    /// Project name when the task is in a project backlog (no workspace).
+    backlog_project: Option<String>,
     /// Workspace `<option>`s grouped by project for the move selector.
     ws_groups: Vec<WsGroup>,
     task: Task,
@@ -1304,6 +1455,8 @@ struct TaskDetailTemplate {
 struct TaskDetailFragmentTemplate {
     /// Workspace of the task, if any.
     ws: Option<WsInfo>,
+    /// Project name when the task is in a project backlog (no workspace).
+    backlog_project: Option<String>,
     /// Workspace `<option>`s grouped by project for the move selector.
     ws_groups: Vec<WsGroup>,
     task: Task,
@@ -1366,6 +1519,8 @@ pub struct BoardQuery {
 struct EpicRow {
     task: Task,
     workspace: Option<WsInfo>,
+    /// Project name when the epic is in a project backlog (project and All scopes only).
+    backlog: Option<String>,
     children_total: usize,
     children_done: usize,
     children_in_progress: usize,
@@ -1427,6 +1582,8 @@ struct EpicDetailTemplate {
     notes_html: Option<String>,
     /// Workspace of the epic, if any.
     ws: Option<WsInfo>,
+    /// Project name when the epic is in a project backlog (no workspace).
+    backlog_project: Option<String>,
     /// Empty on epic detail: the move selector is not offered there (the page polls).
     ws_groups: Vec<WsGroup>,
     /// Parent of the epic (never set; shared metadata partial expects it).
@@ -1453,8 +1610,10 @@ struct TaskNewTemplate {
     layout: Layout,
     /// URL prefix of the current scope (form action and redirect target).
     prefix: String,
-    /// Workspace to pre-select (and the only choice in workspace scope).
+    /// Workspace to pre-select (in workspace scope).
     default_workspace: Option<i64>,
+    /// Project whose backlog is pre-selected (project and backlog scopes).
+    default_backlog: Option<i64>,
     ws_groups: Vec<WsGroup>,
 }
 
@@ -1466,7 +1625,9 @@ struct TaskCreateModalTemplate {
     epics: Vec<Task>,
     /// The workspace in workspace scope; new tasks go there (no selector shown).
     fixed_workspace: Option<WsInfo>,
-    /// Workspace `<option>`s (non-missing only) grouped by project, with the default selected.
+    /// The project in backlog scope; new tasks go to its backlog (hidden field, no selector).
+    fixed_backlog: Option<ProjectInfo>,
+    /// Per-project "Backlog" and workspace `<option>`s (non-missing only), default selected.
     ws_groups: Vec<WsGroup>,
 }
 
@@ -1622,12 +1783,13 @@ pub async fn task_list(
 
 /// GET /tasks/new — Create task form.
 pub async fn task_new(scope: Scope) -> Response {
-    let default_workspace = scope.default_workspace_id();
+    let (default_workspace, default_backlog) = scope.default_placement();
     render_template(TaskNewTemplate {
         layout: scope.layout("tasks"),
         prefix: scope.prefix.clone(),
         default_workspace,
-        ws_groups: scope.groups(default_workspace, false),
+        default_backlog,
+        ws_groups: scope.groups(default_workspace, default_backlog, false),
     })
 }
 
@@ -1673,18 +1835,30 @@ pub async fn task_create_modal(State(state): State<AppState>, scope: Scope) -> R
         }
     };
 
-    // Workspace scope: new tasks go to that workspace. Project scope: default to the first
-    // non-missing workspace of the project. All scope: default to none (unscoped).
-    let default_workspace = scope.default_workspace_id();
+    // Workspace scope: new tasks go to that workspace. Backlog scope: to the project's
+    // backlog. Project scope: default to the project's backlog. All scope: default to none
+    // (unscoped).
+    let (default_workspace, default_backlog) = scope.default_placement();
     let fixed_workspace = if scope.workspace_id.is_some() {
         scope.workspace().cloned()
+    } else {
+        None
+    };
+    let fixed_backlog = if scope.backlog {
+        scope.project_id.and_then(|id| {
+            scope.project_name(id).map(|name| ProjectInfo {
+                id,
+                name: name.to_string(),
+            })
+        })
     } else {
         None
     };
     render_template(TaskCreateModalTemplate {
         epics,
         fixed_workspace,
-        ws_groups: scope.groups(default_workspace, false),
+        fixed_backlog,
+        ws_groups: scope.groups(default_workspace, default_backlog, false),
     })
 }
 
@@ -1694,8 +1868,30 @@ pub struct CreateTaskFormBody {
     pub title: String,
     pub description: Option<String>,
     pub priority: Option<u8>,
-    /// Workspace id; empty string means none. Absent: the scope's workspace, if any.
+    /// Workspace id; empty string means none; `backlog:<project id>` means that project's
+    /// backlog. Absent: the scope's workspace (workspace scope) or backlog (backlog scope).
     pub workspace_id: Option<String>,
+}
+
+/// Where a task created from the HTML forms goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormPlacement {
+    Unscoped,
+    Workspace(i64),
+    Backlog(i64),
+}
+
+/// Parse the `workspace_id` form value: `""` (unscoped), a workspace id, or
+/// `backlog:<project id>`.
+fn parse_form_placement(raw: &str) -> Option<FormPlacement> {
+    use crate::web::scope::parse_id;
+    if raw.is_empty() {
+        return Some(FormPlacement::Unscoped);
+    }
+    if let Some(p) = raw.strip_prefix("backlog:") {
+        return parse_id(p).map(FormPlacement::Backlog);
+    }
+    parse_id(raw).map(FormPlacement::Workspace)
 }
 
 /// POST /tasks — Handle HTML form submission from the create-task form.
@@ -1718,23 +1914,25 @@ pub async fn task_create_form(
         .filter(|d| !d.trim().is_empty())
         .map(|d| d.trim().to_string());
 
-    let workspace_id = match body.workspace_id.as_deref() {
-        None => scope.workspace_id,
-        Some("") => None,
-        Some(s) => Some(
-            crate::web::scope::parse_id(s)
-                .ok_or_else(|| AppError::Validation("invalid workspace_id".to_string()))?,
-        ),
+    let placement = match body.workspace_id.as_deref() {
+        None => match (scope.workspace_id, scope.backlog, scope.project_id) {
+            (Some(w), _, _) => FormPlacement::Workspace(w),
+            (None, true, Some(p)) => FormPlacement::Backlog(p),
+            _ => FormPlacement::Unscoped,
+        },
+        Some(s) => parse_form_placement(s)
+            .ok_or_else(|| AppError::Validation("invalid workspace_id".to_string()))?,
+    };
+    let (workspace_id, backlog_project) = match placement {
+        FormPlacement::Workspace(w) => (Some(w), None),
+        FormPlacement::Backlog(p) => (None, Some(p)),
+        FormPlacement::Unscoped => (None, None),
     };
 
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let db = db.lock().unwrap();
-        if let Some(ws) = workspace_id
-            && db.get_workspace(ws).map_err(AppError::Internal)?.is_none()
-        {
-            return Err(AppError::NotFound(format!("workspace not found: {ws}")));
-        }
+        check_new_placement(&db, workspace_id, backlog_project)?;
         let id = db.generate_id().map_err(AppError::Internal)?;
         let now = chrono::Utc::now();
         let task = Task {
@@ -1751,7 +1949,7 @@ pub async fn task_create_form(
             close_reason: None,
             notes: None,
             workspace_id,
-            project_id: None,
+            project_id: backlog_project,
         };
         db.insert_task(&task).map_err(AppError::Internal)
     })
@@ -1847,10 +2045,17 @@ pub async fn task_detail(
             let updated_rel = relative_time(data.task.updated_at, chrono::Utc::now());
             let comment_views = build_comment_views(data.comments, &data.pending_ids);
             let ws = data.task.workspace_id.and_then(|id| scope.ws(id)).cloned();
-            let ws_groups = scope.groups(data.task.workspace_id, true);
+            let backlog = scope.backlog_project_of(&data.task);
+            let backlog_project = backlog.as_ref().map(|(_, name)| name.clone());
+            let ws_groups = scope.groups(
+                data.task.workspace_id,
+                backlog.as_ref().map(|(id, _)| *id),
+                true,
+            );
             if is_htmx {
                 render_template(TaskDetailFragmentTemplate {
                     ws,
+                    backlog_project,
                     ws_groups,
                     task: data.task,
                     parent: data.parent,
@@ -1867,6 +2072,7 @@ pub async fn task_detail(
                 render_template(TaskDetailTemplate {
                     layout: scope.layout("tasks"),
                     ws,
+                    backlog_project,
                     ws_groups,
                     task: data.task,
                     parent: data.parent,
@@ -2152,13 +2358,17 @@ pub async fn epics(
                 .filter(|c| matches!(c.status, crate::models::Status::InProgress))
                 .count();
             let children_open = children_total - children_done - children_in_progress;
-            let workspace = if scope.show_workspace_badge() {
-                task.workspace_id.and_then(|id| scope.ws(id)).cloned()
+            let (workspace, backlog) = if scope.show_workspace_badge() {
+                (
+                    task.workspace_id.and_then(|id| scope.ws(id)).cloned(),
+                    scope.backlog_project_of(&task).map(|(_, name)| name),
+                )
             } else {
-                None
+                (None, None)
             };
             rows.push(EpicRow {
                 workspace,
+                backlog,
                 task,
                 children_total,
                 children_done,
@@ -2337,6 +2547,7 @@ pub async fn epic_detail(
                 .filter(|n| !n.trim().is_empty())
                 .map(render_markdown);
             let ws = task.workspace_id.and_then(|wid| scope.ws(wid)).cloned();
+            let backlog_project = scope.backlog_project_of(&task).map(|(_, name)| name);
             let updated_rel = relative_time(task.updated_at, chrono::Utc::now());
             let done_since_str = done_since_label(&done_since_param);
             let poll_query = build_epic_detail_poll_query(&view_clone, &done_since_str);
@@ -2358,6 +2569,7 @@ pub async fn epic_detail(
                 description_html,
                 notes_html,
                 ws,
+                backlog_project,
                 ws_groups: Vec::new(),
                 parent: None,
                 updated_rel,
@@ -2685,6 +2897,58 @@ mod tests {
         let some: CreateTaskBody =
             serde_json::from_str(r#"{"title":"x","workspace_id":2}"#).unwrap();
         assert_eq!(some.workspace_id, Some(2));
+    }
+
+    #[test]
+    fn test_project_id_is_optional_in_create_and_update_bodies() {
+        let c: CreateTaskBody = serde_json::from_str(r#"{"title":"x","project_id":3}"#).unwrap();
+        assert_eq!((c.workspace_id, c.project_id), (None, Some(3)));
+        let u: UpdateTaskBody =
+            serde_json::from_str(r#"{"workspace_id":null,"project_id":3}"#).unwrap();
+        assert_eq!((u.workspace_id, u.project_id), (Some(None), Some(3)));
+        let u: UpdateTaskBody = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert_eq!(u.project_id, None);
+        assert!(serde_json::from_str::<UpdateTaskBody>(r#"{"project_id":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn test_parse_form_placement() {
+        use super::{FormPlacement, parse_form_placement};
+        assert_eq!(parse_form_placement(""), Some(FormPlacement::Unscoped));
+        assert_eq!(parse_form_placement("7"), Some(FormPlacement::Workspace(7)));
+        assert_eq!(
+            parse_form_placement("backlog:2"),
+            Some(FormPlacement::Backlog(2))
+        );
+        assert_eq!(parse_form_placement("backlog:"), None);
+        assert_eq!(parse_form_placement("backlog:x"), None);
+        assert_eq!(parse_form_placement("-1"), None);
+        assert_eq!(parse_form_placement("backlog"), None);
+    }
+
+    #[test]
+    fn test_check_new_placement() {
+        use super::check_new_placement;
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::Database::open(&dir.path().join("t.db")).unwrap();
+        let p1 = db.upsert_project("/tmp/p1", "p1").unwrap();
+        let p2 = db.upsert_project("/tmp/p2", "p2").unwrap();
+        let w = db.upsert_workspace(p1.id, "/tmp/p1", "main").unwrap();
+
+        assert_eq!(check_new_placement(&db, None, None).unwrap(), None);
+        assert_eq!(
+            check_new_placement(&db, None, Some(p2.id)).unwrap(),
+            Some(p2.id)
+        );
+        assert!(check_new_placement(&db, None, Some(99)).is_err());
+        assert_eq!(check_new_placement(&db, Some(w.id), None).unwrap(), None);
+        // Same project as the workspace is fine, another project is rejected.
+        assert_eq!(
+            check_new_placement(&db, Some(w.id), Some(p1.id)).unwrap(),
+            None
+        );
+        assert!(check_new_placement(&db, Some(w.id), Some(p2.id)).is_err());
+        assert!(check_new_placement(&db, Some(99), None).is_err());
     }
 
     #[test]

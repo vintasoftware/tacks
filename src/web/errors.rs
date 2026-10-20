@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 /// Application error type for web handlers.
+#[derive(Debug)]
 pub enum AppError {
     BadRequest(String),
     NotFound(String),

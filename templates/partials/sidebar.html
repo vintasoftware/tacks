@@ -17,6 +17,16 @@
         <span class="scope-count" title="Tasks not done">{{ p.open }}</span>
       </a>
       <ul class="scope-list scope-workspaces">
+        <li>
+          <a class="scope-link scope-backlog-link{% if p.backlog_active %} scope-active{% endif %}"
+             data-scope-prefix="/p/{{ p.id }}/backlog"
+             href="/p/{{ p.id }}/backlog/board"
+             title="Tasks of {{ p.name }} that belong to no workspace"
+             {%- if p.backlog_active %} aria-current="page"{% endif %}>
+            <span class="scope-name">Backlog</span>
+            <span class="scope-count" title="Tasks not done">{{ p.backlog_open }}</span>
+          </a>
+        </li>
         {% for w in p.workspaces.iter() %}
         <li>
           <a class="scope-link scope-workspace-link{% if w.active %} scope-active{% endif %}{% if w.missing %} scope-missing{% endif %}"
