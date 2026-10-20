@@ -174,12 +174,13 @@ error: tk-a1b2 belongs to workspace feat-login (project app), not the current wo
 The hint says `--scope all` when the task is in another project or unscoped. Other texts:
 
 ```
-error: tk-a1b2 is in the backlog of project app, not the current workspace. do not act on it unless the user explicitly asked you to; if they did, rerun with --scope backlog
+error: tk-a1b2 is in the backlog of project app, not the current workspace. rerun with --scope backlog
 error: tk-a1b2 belongs to workspace feat-login (project app), not the current project's backlog. do not act on it unless the user explicitly asked you to; if they did, rerun with --scope project
 ```
 
 The hint is `--scope backlog` for a backlog task of the current project under `workspace`
-scope, and `--scope project` for a workspace task of the current project under `workspace`
+scope (the current project's backlog is free for agents, so that message has no "unless the
+user explicitly asked" warning), and `--scope project` for a workspace task of the current project under `workspace`
 or `backlog` scope. The "not the current ..." part is `workspace`, `project` or
 `project's backlog`, after the active `--scope`.
 
@@ -238,10 +239,12 @@ Other commands:
   backlog task (`Workspace:   none` for an unscoped one).
 - `tk prime`: in the default (`workspace`) scope, one line under `## Stats` when the current
   project's backlog has not-done tasks:
-  `Project backlog: N open task(s) (tk list --scope backlog; take one only when the user asks: tk update <id> --claim --scope backlog)`.
+  `Project backlog: N open task(s) (tk list --scope backlog; claim one with tk update <id> --claim --scope backlog)`.
   Hidden when N is 0 (done tasks do not count) and with `--scope backlog|project|all`.
   The command reference and the rules file (`tk init-rules`) say to park out-of-scope
-  findings with `--to-backlog` and not to take backlog tasks unless the user asks.
+  findings with `--to-backlog`, and that agents may list, claim, update and close tasks of
+  the current project's backlog with `--scope backlog` without asking the user (`--scope
+  project|all` still only when the user asks).
 
 JSON: Task gets two new nullable fields, `workspace_id` and `project_id`. `show --json`
 gets a `workspace` object (`id`, `name`, `path`, `project_id`, `project_name`,
@@ -263,8 +266,10 @@ opinion). It does no database or git access and never fails (errors mean no outp
 It asks when a `tk` invocation (at command position: start of command, after `;`, `&&`,
 `||`, `|`, `(`, `$(`, backtick, newline, or after `VAR=value`, `env`, `command`, `exec`) has:
 
-- `--scope backlog`, `--scope project`, `--scope all` (or `--scope=...`); `--scope workspace`
-  is fine. `tk update <id> --claim --scope backlog` (taking a backlog task) therefore asks.
+- `--scope project`, `--scope all` (or `--scope=...`); `--scope workspace` is fine, and so is
+  `--scope backlog`: agents may use the current project's backlog freely, so
+  `tk list --scope backlog` and `tk update <id> --claim --scope backlog` (taking a backlog
+  task) do not ask.
 - `--workspace` / `--workspace=`
 - `--move-to`
 - `--db` / `--db=`

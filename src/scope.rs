@@ -201,6 +201,13 @@ pub fn ensure_in_scope(db: &Database, task: &Task, scope: &Scope) -> Result<(), 
         ScopeMode::Backlog => "current project's backlog",
         _ => "current workspace",
     };
+    // The current project's backlog is free to use: just point at the scope flag.
+    if hint == "--scope backlog" {
+        return Err(format!(
+            "{} {place}, not the {what}. rerun with {hint}",
+            task.id
+        ));
+    }
     Err(format!(
         "{} {place}, not the {what}. do not act on it unless the user explicitly asked you to; if they did, rerun with {hint}",
         task.id
@@ -536,6 +543,7 @@ mod tests {
         assert!(err.contains("is in the backlog of project proj-a"), "{err}");
         assert!(err.contains("not the current workspace"), "{err}");
         assert!(err.ends_with("rerun with --scope backlog"), "{err}");
+        assert!(!err.contains("unless the user"), "{err}");
         let err = ensure_in_scope(&f.db, &f.backlog_b, &sc).unwrap_err();
         assert!(err.contains("backlog of project proj-b"), "{err}");
         assert!(err.ends_with("rerun with --scope all"), "{err}");

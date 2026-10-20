@@ -260,9 +260,10 @@ fn add(out: &mut Vec<String>, s: String) {
     }
 }
 
-/// `--scope` values that reach outside the current workspace.
+/// `--scope` values that reach outside the current project's workspace and backlog.
+/// `backlog` is deliberately absent: agents may use the current project's backlog freely.
 fn is_wide_scope(v: &str) -> bool {
-    matches!(v, "backlog" | "project" | "all")
+    matches!(v, "project" | "all")
 }
 
 /// Inspect the words of a `tk` invocation (after the `tk` word) for flags that
@@ -468,13 +469,12 @@ mod tests {
         assert_eq!(t("tk list --scope all"), ["--scope all"]);
         assert_eq!(t("tk list --scope project"), ["--scope project"]);
         assert_eq!(t("tk --scope=all ready"), ["--scope all"]);
-        assert_eq!(t("tk list --scope backlog"), ["--scope backlog"]);
-        assert_eq!(t("tk --scope=backlog ready"), ["--scope backlog"]);
-        assert_eq!(
-            t("tk update X --claim --scope backlog"),
-            ["--scope backlog"]
-        );
-        assert_eq!(t("bash -c 'tk list --scope backlog'"), ["--scope backlog"]);
+        // the current project's backlog is free to use: no trigger
+        assert!(t("tk list --scope backlog").is_empty());
+        assert!(t("tk --scope=backlog ready").is_empty());
+        assert!(t("tk update X --claim --scope backlog").is_empty());
+        assert!(t("bash -c 'tk list --scope backlog'").is_empty());
+        assert_eq!(t("tk list --scope backlog --scope all"), ["--scope all"]);
         assert_eq!(t("/usr/local/bin/tk list --scope all"), ["--scope all"]);
     }
 

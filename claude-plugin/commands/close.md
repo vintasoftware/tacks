@@ -55,6 +55,6 @@ tk close tk-a1b2 --force -c "Cancelling — requirements changed"
 
 - By default, `tk close` will refuse to close a task that has open subtasks (to protect the hierarchy). Use `--force` to override.
 - `tk close` refuses (exit 1) while the task has unanswered user comments (user feedback from the web UI). Address them and reply with `tk comment <id> "..."` first. Use `--force` only if the user agreed to close anyway.
-- `tk close` only works on tasks of the current workspace. If it refuses a task from another workspace, tell the user; do not rerun with `--scope backlog|project|all` unless they explicitly asked.
+- `tk close` only works on tasks of the current workspace; for a task in the current project's backlog, rerun with `--scope backlog` (allowed without asking). If it refuses a task from another workspace, tell the user; do not rerun with `--scope project|all` unless they explicitly asked.
 - The close reason is stored as a structured field, not just a comment — useful for analytics via `tk stats`.
 - Closed tasks remain in the database and are visible with `tk list -s done`.

@@ -15,7 +15,7 @@ tk ready [--limit <n>] [--scope backlog|project|all] [--workspace <path>] [--jso
 | Flag | Description |
 |------|-------------|
 | `--limit <n>` | Return at most N tasks (e.g., `--limit 1` for the next task) |
-| `--scope backlog|project|all` | Global flag: use the project backlog, include other workspaces of the project, or all workspaces. Use only when the user asks |
+| `--scope backlog|project|all` | Global flag: use the project backlog, include other workspaces of the project, or all workspaces. `backlog` is always allowed; use `project` or `all` only when the user asks |
 | `--workspace <path>` | Global flag: use another workspace instead of the current one |
 
 ## Instructions

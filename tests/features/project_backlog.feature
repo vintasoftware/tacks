@@ -251,7 +251,8 @@ Feature: Project backlog
     And I remember the updated_at of task "parked"
     When I run tk "<command>" in "A"
     Then the tk command fails with exit code 1
-    And the tk error contains resolved "@id(parked) is in the backlog of project repo, not the current workspace. do not act on it unless the user explicitly asked you to; if they did, rerun with --scope backlog"
+    And the tk error contains resolved "@id(parked) is in the backlog of project repo, not the current workspace. rerun with --scope backlog"
+    And the tk error does not contain "unless the user"
     When I run tk "--json show @id(parked)" in "A"
     Then the JSON output path "title" equals "Parked"
     And the JSON output path "status" equals "open"
@@ -473,7 +474,7 @@ Feature: Project backlog
     And I run tk "--json create 'Task in B'" in "B"
     When I run tk "prime" in "B"
     Then the tk command succeeds
-    And the tk output has the line "Project backlog: 2 open tasks (tk list --scope backlog; take one only when the user asks: tk update <id> --claim --scope backlog)" directly under the stats line
+    And the tk output has the line "Project backlog: 2 open tasks (tk list --scope backlog; claim one with tk update <id> --claim --scope backlog)" directly under the stats line
 
   Scenario: prime uses the singular for a backlog with one task
     Given I run tk "--json create 'Workspace task'" in "A"
@@ -599,9 +600,9 @@ Feature: Project backlog
   # Hook
   # ---------------------------------------------------------------------------
 
-  Scenario Outline: tk invocations that read or take from the backlog ask for confirmation
+  Scenario Outline: tk invocations that read or take from the backlog do not ask for confirmation
     When I run the pre-tool-use hook for the Bash command <command>
-    Then the hook asks for confirmation naming "--scope backlog"
+    Then the hook prints nothing and exits 0
 
     Examples:
       | command                                   |
@@ -609,6 +610,10 @@ Feature: Project backlog
       | tk list --scope=backlog                   |
       | tk update X --claim --scope backlog       |
       | bash -c 'tk ready --scope backlog'        |
+
+  Scenario: a command that mixes --scope backlog with a wider scope still asks for confirmation
+    When I run the pre-tool-use hook for the Bash command tk list --scope backlog --scope all
+    Then the hook asks for confirmation naming "--scope all"
 
   Scenario Outline: moving into the backlog does not ask for confirmation
     When I run the pre-tool-use hook for the Bash command <command>

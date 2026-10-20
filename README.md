@@ -192,7 +192,7 @@ claude --plugin-dir ./claude-plugin
 - **Slash commands** for all `tk` operations: `/tacks:create`, `/tacks:list`, `/tacks:ready`, `/tacks:show`, `/tacks:update`, `/tacks:close`, `/tacks:dep`, `/tacks:comment`, `/tacks:children`, `/tacks:epic`, `/tacks:blocked`, `/tacks:stats`, `/tacks:prime`, `/tacks:init`, `/tacks:workspaces`
 - **SessionStart hook** that auto-loads backlog context via `tk prime` for the current workspace (silent in workspaces that have no tasks; install the rules file too, see [Set up your agents](#set-up-your-agents-claude-code))
 - **PreCompact hook** that re-runs `tk prime` before context compaction to preserve backlog state
-- **PreToolUse hook** that asks you to confirm any Bash `tk` command reaching outside the current workspace (`--scope backlog|project|all`, `--workspace`, `--move-to`, `--db`, `TACKS_WORKSPACE`/`TACKS_DB`); see [workspace scoping](docs/workspace-scoping.md#agent-hook)
+- **PreToolUse hook** that asks you to confirm any Bash `tk` command reaching outside the current workspace and the project backlog (`--scope project|all`, `--workspace`, `--move-to`, `--db`, `TACKS_WORKSPACE`/`TACKS_DB`); see [workspace scoping](docs/workspace-scoping.md#agent-hook)
 - **PostToolUse hook** that delivers unanswered user comments (written in the web UI) into the running session; see [user feedback](docs/user-feedback.md)
 - **Task agent** (`@task-agent`) for autonomous work discovery: finds ready tasks, claims them, executes, files discoveries, and closes on completion
 
@@ -241,9 +241,9 @@ Tasks are scoped per git worktree ("workspace"); worktrees of the same repositor
 
 - `list`, `ready`, `blocked`, `epic`, `stats`, `prime` show the current workspace only. Use `--scope backlog` for the project backlog, `--scope project` for every workspace of the repository plus its backlog, `--scope all` for everything. (`list -a` still means "include closed".)
 - `create` records the current workspace; subtasks inherit the parent's workspace.
-- Write guard: `update`, `close`, `comment`, `dep add|remove` and `create --parent` refuse (exit 1) tasks outside the current workspace, so agents stay in their lane. `--scope backlog|project|all` widens the guard (`backlog` allows only the project's backlog tasks); use it only when asked. `show` and `children` read any task, and the web UI/API are unrestricted.
+- Write guard: `update`, `close`, `comment`, `dep add|remove` and `create --parent` refuse (exit 1) tasks outside the current workspace, so agents stay in their lane. `--scope backlog|project|all` widens the guard (`backlog` allows only the project's backlog tasks). Agents may use `--scope backlog` freely; `--scope project|all` only when asked. `show` and `children` read any task, and the web UI/API are unrestricted.
 - `tk update <id> --move-to <path|none>` moves a task and its subtasks to another workspace (or the unscoped bucket).
-- Project backlog: tasks of a project that belong to no workspace yet. `--to-backlog` (on `create` and `update`) parks a task there; agents use it for out-of-scope findings. `tk update <id> --claim --scope backlog` takes one into the current workspace. `tk prime` shows one backlog line.
+- Project backlog: tasks of a project that belong to no workspace yet. `--to-backlog` (on `create` and `update`) parks a task there; agents use it for out-of-scope findings. `tk update <id> --claim --scope backlog` takes one into the current workspace. Agents may list, claim, update and close the project's backlog tasks with `--scope backlog` without asking (no hook prompt). `tk prime` shows one backlog line.
 - `tk prime` is silent when the current workspace has never used tacks.
 
 See `docs/workspace-scoping.md` for details.

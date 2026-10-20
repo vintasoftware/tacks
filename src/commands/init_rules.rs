@@ -32,8 +32,8 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 
 ## Workspace boundaries
 
-- Work only on tasks of your current workspace. Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks of other workspaces.
-- Never use `--scope backlog|project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace.
+- Work on tasks of your current workspace and of the current project's backlog. Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks of other workspaces.
+- `--scope backlog` is always allowed (see "Project backlog"). Never use `--scope project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace.
 - If a task you need belongs elsewhere, tell the user instead of acting on it.
 - Reading other workspaces' tasks with `tk show <id>` is fine.
 
@@ -42,8 +42,8 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 The project backlog holds tasks that belong to no workspace yet. `tk prime` shows a line when it has open tasks.
 
 - Found work that is out of scope for this workspace? Park it in the backlog: `tk create <title> --to-backlog`, or `tk update <id> --to-backlog` for an existing task. Do not do it yourself and do not use `--move-to`.
-- Do not take backlog tasks on your own. Take one only when the user asks: `tk update <id> --claim --scope backlog` (it moves the task into this workspace).
-- Look at the backlog (`tk list --scope backlog`) only when the user asks.
+- You may look at the backlog (`tk list --scope backlog`, `tk ready --scope backlog`) and claim one of its tasks without asking: `tk update <id> --claim --scope backlog` (it moves the task into this workspace).
+- You may also `update`, `comment` on and `close` backlog tasks with `--scope backlog` without asking.
 
 ## Workflow
 
@@ -182,6 +182,11 @@ mod tests {
         assert!(RULES_CONTENT.contains("tk create <title> --to-backlog"));
         assert!(RULES_CONTENT.contains("tk update <id> --to-backlog"));
         assert!(RULES_CONTENT.contains("tk update <id> --claim --scope backlog"));
-        assert!(RULES_CONTENT.contains("`--scope backlog|project|all`"));
+        assert!(RULES_CONTENT.contains("tk list --scope backlog"));
+        assert!(RULES_CONTENT.contains("tk ready --scope backlog"));
+        assert!(RULES_CONTENT.contains("`--scope backlog` is always allowed"));
+        assert!(RULES_CONTENT.contains("Never use `--scope project|all`"));
+        assert!(!RULES_CONTENT.contains("only when the user asks"));
+        assert!(!RULES_CONTENT.contains("`--scope backlog|project|all`"));
     }
 }

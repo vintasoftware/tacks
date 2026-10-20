@@ -14,7 +14,7 @@ tk workspaces [--json]
 
 1. Run `tk workspaces --json` using the Bash tool.
 2. Present the projects and workspaces with their task counts, noting the current one and any missing paths.
-3. To act on another workspace, pass the global `--workspace <path>` flag; to widen a list-type command, pass `--scope backlog`, `--scope project` or `--scope all` (only when the user asks).
+3. To act on another workspace, pass the global `--workspace <path>` flag; to include the project backlog in a list-type command, pass `--scope backlog` (always allowed); `--scope project` or `--scope all` only when the user asks.
 
 ## Examples
 
@@ -41,4 +41,4 @@ tk --workspace /path/to/worktree ready
 - `--scope workspace|backlog|project|all` (default `workspace`; `backlog` is the project backlog, tasks in no workspace) applies to `list`, `ready`, `prime`, `blocked`, `epic`, and `stats`.
 - ID-based commands (`show`, `update`, `close`, `comment`, `dep`, `children`) work on any task regardless of scope.
 - Move a task and its subtasks to another workspace with `tk update <id> --move-to <path|none>`.
-- Park a task in the project backlog with `tk update <id> --to-backlog` or `tk create <title> --to-backlog`; take one from it with `tk update <id> --claim --scope backlog` (only when the user asks).
+- Park a task in the project backlog with `tk update <id> --to-backlog` or `tk create <title> --to-backlog`; take one from it with `tk update <id> --claim --scope backlog` (allowed without asking the user).

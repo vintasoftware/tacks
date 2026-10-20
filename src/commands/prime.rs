@@ -19,8 +19,8 @@ const COMMAND_REFERENCE: &[&str] = &[
     "Write descriptions for the user to review and decide; when blocked, set -s blocked and add a '## Blocked' section (cause, tried, decision needed, options, recommendation)",
     "tk stats [--oneline] [--json]",
     "tk workspaces [--json]",
-    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope backlog|project|all to widen (reads only; do not use it for writes unless the user asked)",
-    "Backlog: park work that does not belong to this workspace (out-of-scope findings) with tk create <title> --to-backlog or tk update <id> --to-backlog; take a backlog task only when the user asks (tk update <id> --claim --scope backlog)",
+    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope backlog to include the current project's backlog (free to use, reads and writes); --scope project|all only when the user asks",
+    "Backlog: park work that does not belong to this workspace (out-of-scope findings) with tk create <title> --to-backlog or tk update <id> --to-backlog; you may list, claim, update and close backlog tasks with --scope backlog without asking (tk update <id> --claim --scope backlog moves one into this workspace)",
 ];
 
 /// Run the `tk prime` command.
@@ -132,7 +132,7 @@ fn backlog_line(counts: &BacklogTaskCounts) -> Option<String> {
     }
     let noun = if n == 1 { "task" } else { "tasks" };
     Some(format!(
-        "Project backlog: {n} open {noun} (tk list --scope backlog; take one only when the user asks: tk update <id> --claim --scope backlog)"
+        "Project backlog: {n} open {noun} (tk list --scope backlog; claim one with tk update <id> --claim --scope backlog)"
     ))
 }
 
@@ -481,6 +481,7 @@ mod tests {
             "{three}"
         );
         assert!(three.contains("tk update <id> --claim --scope backlog"));
+        assert!(!three.contains("only when the user asks"), "{three}");
     }
 
     #[test]
@@ -549,6 +550,16 @@ mod tests {
             super::COMMAND_REFERENCE
                 .iter()
                 .any(|l| l.contains("--to-backlog") && l.contains("--scope backlog"))
+        );
+        // backlog is free to use; only project|all need the user
+        assert!(super::COMMAND_REFERENCE.iter().all(|l| {
+            !l.contains("take a backlog task only when the user asks")
+                && !l.contains("--scope backlog|project|all")
+        }));
+        assert!(
+            super::COMMAND_REFERENCE
+                .iter()
+                .any(|l| l.contains("--scope project|all only when the user asks"))
         );
     }
 }

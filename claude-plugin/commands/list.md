@@ -19,7 +19,7 @@ tk list [-a] [-s <status>] [-p <priority>] [-t <tag>] [--parent <id>] [--scope b
 | `-p <priority>` | Filter by priority level (e.g., `-p 1` for P1 tasks) |
 | `-t <tag>` | Filter by tag (e.g., `-t backend`) |
 | `--parent <id>` | Show only children of the given task ID |
-| `--scope backlog|project|all` | Global flag: widen from the current workspace to the project backlog (tasks in no workspace), the whole project (workspaces plus backlog), or every workspace. Use only when the user asks |
+| `--scope backlog|project|all` | Global flag: widen from the current workspace to the project backlog (tasks in no workspace), the whole project (workspaces plus backlog), or every workspace. `backlog` is always allowed; use `project` or `all` only when the user asks |
 | `--workspace <path>` | Global flag: list another workspace instead of the current one |
 
 ## Instructions

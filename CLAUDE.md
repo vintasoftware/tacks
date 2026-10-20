@@ -70,7 +70,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 - **No external dependencies**: SQLite is bundled (no system sqlite needed)
 - **Global DB**: default path is `~/.tacks/tacks.db`; `--db` / `TACKS_DB` override it
 - **Workspace scoping**: tasks are scoped per git worktree; ID-based writes (update, close, comment, dep, create --parent) are guarded by `--scope` (reads like show/children are not); see `docs/workspace-scoping.md` (`src/scope.rs` resolves scope)
-- **Project backlog**: tasks with a project but no workspace (`workspace_id IS NULL`, `project_id` set; migration v7 adds nullable `tasks.project_id`, always kept in sync with the workspace). Filter: `--scope backlog` (error outside git; `--scope project` includes the backlog). Park: `--to-backlog` on `create`/`update` (allowed in the default scope; the hook does not ask). Take: `tk update <id> --claim --scope backlog` pulls the task into the current workspace (the hook asks for `--scope backlog`). `--to-backlog` conflicts with `--move-to`, `--claim` and `create --parent`. `--move-to none` on a backlog task makes it unscoped. `tk prime` shows one backlog line and `backlog` JSON counts; `tk workspaces --json` is unchanged (web: `GET /api/backlogs`). See `docs/workspace-scoping.md`
+- **Project backlog**: tasks with a project but no workspace (`workspace_id IS NULL`, `project_id` set; migration v7 adds nullable `tasks.project_id`, always kept in sync with the workspace). Filter: `--scope backlog` (error outside git; `--scope project` includes the backlog). Park: `--to-backlog` on `create`/`update` (allowed in the default scope; the hook does not ask). Take: `tk update <id> --claim --scope backlog` pulls the task into the current workspace (the hook does not ask for `--scope backlog`: agents may use their project's backlog freely; it still asks for `--scope project|all`). `--to-backlog` conflicts with `--move-to`, `--claim` and `create --parent`. `--move-to none` on a backlog task makes it unscoped. `tk prime` shows one backlog line and `backlog` JSON counts; `tk workspaces --json` is unchanged (web: `GET /api/backlogs`). See `docs/workspace-scoping.md`
 - **User feedback loop**: comments carry an author (`user` from the web UI, `agent` from the CLI); unanswered user comments show in `tk prime`/`tk show`/a PostToolUse hook and block `tk close` (unless `--force`); see `docs/user-feedback.md`
 - **BDD-driven**: Feature files are both executable tests and agent-readable behavioral documentation
 - **`--json` is global**: Declared on top-level Cli struct, accessed via `cli.json`
@@ -80,7 +80,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (667 scenarios, 7304 steps)
+cargo test --test bdd    # Run BDD scenarios (668 scenarios, 7321 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```

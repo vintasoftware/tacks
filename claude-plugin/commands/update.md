@@ -27,7 +27,7 @@ tk update <id> [--title <title>] [--priority <n>] [--status <status>]
 | `--parent none` | Promote subtask to top-level task |
 | `--move-to <path>` | Move the task and its subtasks to another workspace (worktree path); `none` makes it unscoped |
 | `--to-backlog` | Move the task and its subtasks to the project backlog (no workspace) |
-| `--claim --scope backlog` | Take a backlog task: claims it and moves it into the current workspace. Only when the user asks |
+| `--claim --scope backlog` | Take a backlog task: claims it and moves it into the current workspace. Allowed without asking the user |
 
 ## Instructions
 
@@ -69,8 +69,8 @@ tk update tk-c3d4.1 --parent none
 - `--claim` is the standard way to start working on a task: it sets `status=in_progress` and records the assignee.
 - `--notes` **overwrites** previous notes — it is mutable working context, not a log. Use `tk comment` to append to the activity log instead.
 - `--move-to` registers the target workspace if it is new; see `/tacks:workspaces` for listing workspaces.
-- `update` only works on tasks of the current workspace (for `--parent`, both tasks; for `--move-to`, the task being moved). A task elsewhere fails with an error naming its workspace. Do not rerun with `--scope backlog|project|all`, and do not use `--move-to`, `--workspace` or `TACKS_WORKSPACE`, unless the user explicitly asked for that task or workspace; otherwise tell the user.
-- `--to-backlog` parks work that does not belong to this workspace. Do not take a backlog task (`--claim --scope backlog`) unless the user asks.
+- `update` only works on tasks of the current workspace (for `--parent`, both tasks; for `--move-to`, the task being moved). A task in the current project's backlog needs `--scope backlog`, which you may use without asking. A task elsewhere fails with an error naming its workspace: do not rerun with `--scope project|all`, and do not use `--move-to`, `--workspace` or `TACKS_WORKSPACE`, unless the user explicitly asked for that task or workspace; otherwise tell the user.
+- `--to-backlog` parks work that does not belong to this workspace. You may take a backlog task (`--claim --scope backlog`) without asking the user.
 - Descriptions and notes are markdown; the web UI renders them. Use checklists, `code` spans and multi-line text.
 - Multiple flags can be combined in a single `tk update` call.
 - Use `--json` to parse the updated task back.
