@@ -18,9 +18,19 @@ pub fn run(
     notes: Option<&str>,
     parent: Option<&str>,
     move_to: Option<&str>,
+    to_backlog: bool,
     scope: &scope::Scope,
     json: bool,
 ) -> Result<(), String> {
+    if to_backlog && move_to.is_some() {
+        return Err("--to-backlog cannot be used with --move-to".to_string());
+    }
+    if to_backlog && claim {
+        return Err(
+            "--to-backlog cannot be used with --claim; claiming moves the task into the current workspace"
+                .to_string(),
+        );
+    }
     let db = Database::open(db_path)?;
 
     // Write guard: the task (and a new parent) must be in scope, checked before any write.
@@ -66,9 +76,37 @@ pub fn run(
         }
     };
 
+    // Resolve the --to-backlog target (read-only). The task's own project wins; an unscoped
+    // task goes to the current project, which is registered inside the transaction.
+    let task_before = db.get_task(id)?;
+    let backlog_fallback: Option<scope::ResolvedWorkspace> = if to_backlog {
+        let fallback = scope.resolve()?;
+        if fallback.is_none() && task_before.as_ref().is_some_and(|t| t.project_id.is_none()) {
+            return Err(scope::NO_BACKLOG_ERROR.to_string());
+        }
+        fallback
+    } else {
+        None
+    };
+
+    // Claiming a backlog task pulls it (and its subtasks) into the current workspace,
+    // registered inside the transaction. The guard above already checked the scope.
+    let pull_target: Option<scope::ResolvedWorkspace> = if claim
+        && task_before
+            .as_ref()
+            .is_some_and(|t| t.workspace_id.is_none() && t.project_id.is_some())
+    {
+        Some(scope.resolve()?.ok_or_else(|| {
+            "cannot claim a backlog task without a current workspace to move it into; use --workspace <path>"
+                .to_string()
+        })?)
+    } else {
+        None
+    };
+
     // Everything below is one transaction: a failing update leaves the task unchanged.
-    // Order: reparent (moves the subtree to the new parent's workspace), then the
-    // explicit --move-to, which therefore wins when both are given.
+    // Order: reparent (moves the subtree to the new parent's workspace), then the claim
+    // pull-in, then the explicit --move-to / --to-backlog, which therefore win.
     db.with_savepoint(|| {
         db.update_task_with_parent(
             id,
@@ -113,6 +151,26 @@ pub fn run(
             }
 
             db.update_tags(id, &current_tags)?;
+        }
+
+        // Pull: a claimed backlog task moves into the current workspace, unless the
+        // reparent above already placed it elsewhere.
+        if let Some(resolved) = &pull_target
+            && db
+                .get_task(id)?
+                .is_some_and(|t| t.workspace_id.is_none() && t.project_id.is_some())
+        {
+            let workspace_id = scope::register(&db, resolved)?.id;
+            db.set_task_workspace(id, Some(workspace_id))?;
+        }
+
+        if to_backlog && let Some(task) = db.get_task(id)? {
+            let project_id = match (task.project_id, &backlog_fallback) {
+                (Some(pid), _) => pid,
+                (None, Some(r)) => db.upsert_project(&r.project_path, &r.project_name)?.id,
+                (None, None) => return Err(scope::NO_BACKLOG_ERROR.to_string()),
+            };
+            db.move_task_to_backlog(id, project_id)?;
         }
 
         if let Some(target) = &move_target {

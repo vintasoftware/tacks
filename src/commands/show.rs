@@ -52,6 +52,18 @@ fn workspace_json(db: &Database, workspace_id: Option<i64>) -> Result<serde_json
     })
 }
 
+/// The task's project (workspace tasks and backlog tasks) as `{id, name, path}`, or null.
+fn project_json(db: &Database, project_id: Option<i64>) -> Result<serde_json::Value, String> {
+    let project = match project_id {
+        Some(id) => db.get_project(id)?,
+        None => None,
+    };
+    Ok(match project {
+        Some(p) => serde_json::json!({ "id": p.id, "name": p.name, "path": p.path }),
+        None => serde_json::Value::Null,
+    })
+}
+
 /// Show a task with blockers, dependents, subtasks, comments and its workspace.
 pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
     let db = Database::open(db_path)?;
@@ -71,6 +83,7 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
         let children = db.get_children(id)?;
         let dependents = db.get_dependents(id)?;
         let workspace = workspace_json(&db, task.workspace_id)?;
+        let project = project_json(&db, task.project_id)?;
         // Additive: ids of user comments still awaiting an agent reply.
         let pending_ids: Vec<i64> = db
             .task_pending_user_comments(id)?
@@ -83,6 +96,7 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
                 serde_json::to_value(&pending_ids).unwrap_or_default(),
             );
             obj.insert("workspace".to_string(), workspace);
+            obj.insert("project".to_string(), project);
             obj.insert(
                 "comments".to_string(),
                 serde_json::to_value(&comments).unwrap_or_default(),
@@ -136,7 +150,16 @@ pub fn run(db_path: &Path, id: &str, json: bool) -> Result<(), String> {
             w.project_name,
             if w.missing { " (missing)" } else { "" }
         ),
-        None => println!("Workspace:   none"),
+        None => match task.project_id {
+            Some(pid) => {
+                let name = db
+                    .get_project(pid)?
+                    .map(|p| p.name)
+                    .unwrap_or_else(|| format!("#{pid}"));
+                println!("Workspace:   none (backlog of project {name})");
+            }
+            None => println!("Workspace:   none"),
+        },
     }
     println!("Created:     {}", task.created_at.format("%Y-%m-%d %H:%M"));
     println!("Updated:     {}", task.updated_at.format("%Y-%m-%d %H:%M"));

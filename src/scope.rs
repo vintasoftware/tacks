@@ -7,14 +7,16 @@ use std::process::{Command, Stdio};
 use clap::ValueEnum;
 
 use crate::db::{Database, ScopeFilter};
-use crate::models::{Task, Workspace};
+use crate::models::{Project, Task, Workspace};
 
 /// How wide list-type commands look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ScopeMode {
     /// Only the current workspace (default).
     Workspace,
-    /// Every workspace of the current project.
+    /// The current project's backlog: tasks in the project but in no workspace.
+    Backlog,
+    /// Every workspace of the current project, plus its backlog.
     Project,
     /// The whole database.
     All,
@@ -59,11 +61,17 @@ impl Scope {
     }
 
     /// Translate the scope into a query filter without registering anything.
+    ///
+    /// `--scope backlog` needs a resolvable workspace (to find the project) and fails with
+    /// [`NO_BACKLOG_ERROR`] otherwise; an unregistered project has no tasks (`Nothing`).
     pub fn filter(&self, db: &Database) -> Result<ScopeFilter, String> {
         if self.mode == ScopeMode::All {
             return Ok(ScopeFilter::All);
         }
         let Some(resolved) = self.resolve()? else {
+            if self.mode == ScopeMode::Backlog {
+                return Err(NO_BACKLOG_ERROR.to_string());
+            }
             return Ok(ScopeFilter::Unscoped);
         };
         match self.mode {
@@ -73,19 +81,26 @@ impl Scope {
                     None => ScopeFilter::Nothing,
                 })
             }
-            ScopeMode::Project => {
-                let project = db
-                    .list_projects()?
-                    .into_iter()
-                    .find(|p| p.path == resolved.project_path);
-                Ok(match project {
-                    Some(p) => ScopeFilter::Project(p.id),
-                    None => ScopeFilter::Nothing,
-                })
-            }
+            ScopeMode::Backlog => Ok(match find_project(db, &resolved.project_path)? {
+                Some(p) => ScopeFilter::Backlog(p.id),
+                None => ScopeFilter::Nothing,
+            }),
+            ScopeMode::Project => Ok(match find_project(db, &resolved.project_path)? {
+                Some(p) => ScopeFilter::Project(p.id),
+                None => ScopeFilter::Nothing,
+            }),
             ScopeMode::All => Ok(ScopeFilter::All),
         }
     }
+}
+
+/// Error for `--scope backlog` / `create --to-backlog` when no project can be resolved.
+pub const NO_BACKLOG_ERROR: &str =
+    "not in a git repository, so there is no project backlog; use --workspace <path>";
+
+/// Read-only lookup of a registered project by its path.
+fn find_project(db: &Database, path: &str) -> Result<Option<Project>, String> {
+    Ok(db.list_projects()?.into_iter().find(|p| p.path == path))
 }
 
 /// Guard for ID-based write commands: refuse a task outside the allowed scope.
@@ -93,66 +108,87 @@ impl Scope {
 /// Read-only (lookups only), so callers run it before any write. A missing task
 /// passes here; the command's own "task not found" error then applies.
 ///
+/// A task is in a workspace (`workspace_id` set), in a project backlog (`workspace_id`
+/// NULL, `project_id` set) or unscoped (both NULL).
+///
 /// - `--scope all`: always allowed.
 /// - `workspace`: the task's workspace must be the current registered workspace
-///   (no resolvable workspace: the task must be unscoped).
-/// - `project`: the task's workspace must belong to the current project (no
-///   resolvable workspace: the task must be unscoped).
+///   (no resolvable workspace: the task must be unscoped). Backlog tasks are out of scope.
+/// - `backlog`: only backlog tasks of the current project (no resolvable workspace is an
+///   error, there is no project).
+/// - `project`: the task's workspace, or its backlog project, must be the current
+///   project (no resolvable workspace: the task must be unscoped).
 pub fn ensure_in_scope(db: &Database, task: &Task, scope: &Scope) -> Result<(), String> {
     if scope.mode == ScopeMode::All {
         return Ok(());
     }
     let current = scope.resolve()?;
+    if current.is_none() && scope.mode == ScopeMode::Backlog {
+        return Err(NO_BACKLOG_ERROR.to_string());
+    }
     let task_ws = match task.workspace_id {
         Some(id) => db.get_workspace(id)?,
         None => None,
     };
-    let task_project = match &task_ws {
-        Some(w) => db.get_project(w.project_id)?,
-        None => None,
+    // Workspace tasks: the workspace's project. Backlog tasks: `project_id`.
+    let task_project = match (&task_ws, task.project_id) {
+        (Some(w), _) => db.get_project(w.project_id)?,
+        (None, Some(pid)) => db.get_project(pid)?,
+        (None, None) => None,
     };
-    let allowed = match (&current, task.workspace_id) {
-        (None, None) => true,
-        (None, Some(_)) | (Some(_), None) => false,
-        (Some(r), Some(wid)) => match scope.mode {
-            ScopeMode::Workspace => db
-                .find_workspace_by_path(&r.workspace_path)?
-                .is_some_and(|w| w.id == wid),
-            _ => task_project
-                .as_ref()
-                .is_some_and(|p| p.path == r.project_path),
-        },
+    let is_backlog = task.workspace_id.is_none() && task.project_id.is_some();
+    let in_current_project = match (&current, &task_project) {
+        (Some(r), Some(p)) => p.path == r.project_path,
+        _ => false,
+    };
+    let allowed = if is_backlog {
+        match scope.mode {
+            ScopeMode::Backlog | ScopeMode::Project => in_current_project,
+            _ => false,
+        }
+    } else {
+        match (&current, task.workspace_id) {
+            (None, None) => true,
+            (None, Some(_)) | (Some(_), None) => false,
+            (Some(r), Some(wid)) => match scope.mode {
+                ScopeMode::Workspace => db
+                    .find_workspace_by_path(&r.workspace_path)?
+                    .is_some_and(|w| w.id == wid),
+                ScopeMode::Project => in_current_project,
+                // backlog mode only covers backlog tasks; `all` returned above
+                ScopeMode::Backlog | ScopeMode::All => false,
+            },
+        }
     };
     if allowed {
         return Ok(());
     }
-    let same_project = match (&current, &task_project) {
-        (Some(r), Some(p)) => p.path == r.project_path,
-        _ => false,
-    };
-    let hint = if same_project && scope.mode == ScopeMode::Workspace {
+    let hint = if in_current_project && scope.mode == ScopeMode::Workspace && is_backlog {
+        "--scope backlog"
+    } else if in_current_project && scope.mode != ScopeMode::Project && !is_backlog {
         "--scope project"
     } else {
         "--scope all"
     };
-    let place = match task.workspace_id {
-        None => "is unscoped (no workspace, no project)".to_string(),
-        Some(wid) => {
+    let project_name = task_project
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let place = match (task.workspace_id, task.project_id) {
+        (None, None) => "is unscoped (no workspace, no project)".to_string(),
+        (None, Some(_)) => format!("is in the backlog of project {project_name}"),
+        (Some(wid), _) => {
             let ws = task_ws
                 .as_ref()
                 .map(|w| w.name.clone())
                 .unwrap_or_else(|| format!("#{wid}"));
-            let pr = task_project
-                .as_ref()
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| "unknown".to_string());
-            format!("belongs to workspace {ws} (project {pr})")
+            format!("belongs to workspace {ws} (project {project_name})")
         }
     };
-    let what = if scope.mode == ScopeMode::Project {
-        "current project"
-    } else {
-        "current workspace"
+    let what = match scope.mode {
+        ScopeMode::Project => "current project",
+        ScopeMode::Backlog => "current project's backlog",
+        _ => "current workspace",
     };
     Err(format!(
         "{} {place}, not the {what}. do not act on it unless the user explicitly asked you to; if they did, rerun with {hint}",
@@ -389,5 +425,145 @@ mod tests {
         assert_eq!(d.project_path, d.workspace_path);
 
         assert!(resolve(Some(&root.join("missing")), &repo).is_err());
+    }
+
+    /// A DB with two plain (non-git) projects: tasks in A's workspace, in A's backlog,
+    /// in B's backlog, in B's workspace, and unscoped.
+    struct Fixture {
+        db: Database,
+        _tmp: TempDir,
+        dir_a: PathBuf,
+        ws_task: Task,
+        backlog_a: Task,
+        backlog_b: Task,
+        ws_b: Task,
+        unscoped: Task,
+    }
+
+    fn fixture() -> Fixture {
+        let tmp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let dir_a = root.join("proj-a");
+        let dir_b = root.join("proj-b");
+        std::fs::create_dir(&dir_a).unwrap();
+        std::fs::create_dir(&dir_b).unwrap();
+        let db = Database::open(&root.join("t.db")).unwrap();
+        let ra = resolve(Some(&dir_a), &root).unwrap().unwrap();
+        let rb = resolve(Some(&dir_b), &root).unwrap().unwrap();
+        let wa = register(&db, &ra).unwrap();
+        let wb = register(&db, &rb).unwrap();
+        let mk = |ws: Option<i64>, project: Option<i64>| {
+            let now = chrono::Utc::now();
+            let t = Task {
+                id: db.generate_id().unwrap(),
+                title: "t".to_string(),
+                description: None,
+                status: crate::models::Status::Open,
+                priority: 2,
+                assignee: None,
+                parent_id: None,
+                tags: Vec::new(),
+                created_at: now,
+                updated_at: now,
+                close_reason: None,
+                notes: None,
+                workspace_id: ws,
+                project_id: project,
+            };
+            match (ws, project) {
+                (None, Some(p)) => db.insert_backlog_task(&t, p).unwrap(),
+                _ => db.insert_task(&t).unwrap(),
+            }
+            db.get_task(&t.id).unwrap().unwrap()
+        };
+        let ws_task = mk(Some(wa.id), None);
+        let ws_b = mk(Some(wb.id), None);
+        let backlog_a = mk(None, Some(wa.project_id));
+        let backlog_b = mk(None, Some(wb.project_id));
+        let unscoped = mk(None, None);
+        Fixture {
+            db,
+            _tmp: tmp,
+            dir_a,
+            ws_task,
+            backlog_a,
+            backlog_b,
+            ws_b,
+            unscoped,
+        }
+    }
+
+    fn scope_in(dir: &Path, mode: ScopeMode) -> Scope {
+        Scope {
+            explicit: Some(dir.to_path_buf()),
+            mode,
+        }
+    }
+
+    #[test]
+    fn test_filter_backlog_registered_and_unregistered() {
+        let f = fixture();
+        let filter = scope_in(&f.dir_a, ScopeMode::Backlog)
+            .filter(&f.db)
+            .unwrap();
+        assert_eq!(
+            filter,
+            ScopeFilter::Backlog(f.backlog_a.project_id.unwrap())
+        );
+        let other = f.dir_a.parent().unwrap().join("fresh");
+        std::fs::create_dir(&other).unwrap();
+        let filter = scope_in(&other, ScopeMode::Backlog).filter(&f.db).unwrap();
+        assert_eq!(filter, ScopeFilter::Nothing);
+    }
+
+    #[test]
+    fn test_guard_workspace_scope_refuses_backlog_with_hint() {
+        let f = fixture();
+        let sc = scope_in(&f.dir_a, ScopeMode::Workspace);
+        assert!(ensure_in_scope(&f.db, &f.ws_task, &sc).is_ok());
+        let err = ensure_in_scope(&f.db, &f.backlog_a, &sc).unwrap_err();
+        assert!(err.contains("is in the backlog of project proj-a"), "{err}");
+        assert!(err.contains("not the current workspace"), "{err}");
+        assert!(err.ends_with("rerun with --scope backlog"), "{err}");
+        let err = ensure_in_scope(&f.db, &f.backlog_b, &sc).unwrap_err();
+        assert!(err.contains("backlog of project proj-b"), "{err}");
+        assert!(err.ends_with("rerun with --scope all"), "{err}");
+        let err = ensure_in_scope(&f.db, &f.unscoped, &sc).unwrap_err();
+        assert!(err.contains("is unscoped"), "{err}");
+    }
+
+    #[test]
+    fn test_guard_backlog_scope_allows_only_current_project_backlog() {
+        let f = fixture();
+        let sc = scope_in(&f.dir_a, ScopeMode::Backlog);
+        assert!(ensure_in_scope(&f.db, &f.backlog_a, &sc).is_ok());
+        let err = ensure_in_scope(&f.db, &f.ws_task, &sc).unwrap_err();
+        assert!(err.contains("belongs to workspace proj-a"), "{err}");
+        assert!(err.contains("not the current project's backlog"), "{err}");
+        assert!(err.ends_with("rerun with --scope project"), "{err}");
+        let err = ensure_in_scope(&f.db, &f.backlog_b, &sc).unwrap_err();
+        assert!(err.ends_with("rerun with --scope all"), "{err}");
+        assert!(ensure_in_scope(&f.db, &f.unscoped, &sc).is_err());
+        assert!(ensure_in_scope(&f.db, &f.ws_b, &sc).is_err());
+    }
+
+    #[test]
+    fn test_guard_project_scope_covers_workspaces_and_backlog() {
+        let f = fixture();
+        let sc = scope_in(&f.dir_a, ScopeMode::Project);
+        assert!(ensure_in_scope(&f.db, &f.ws_task, &sc).is_ok());
+        assert!(ensure_in_scope(&f.db, &f.backlog_a, &sc).is_ok());
+        assert!(ensure_in_scope(&f.db, &f.backlog_b, &sc).is_err());
+        assert!(ensure_in_scope(&f.db, &f.ws_b, &sc).is_err());
+        assert!(ensure_in_scope(&f.db, &f.unscoped, &sc).is_err());
+    }
+
+    #[test]
+    fn test_guard_all_scope_allows_everything() {
+        let f = fixture();
+        let sc = scope_in(&f.dir_a, ScopeMode::All);
+        for t in [&f.ws_task, &f.backlog_a, &f.backlog_b, &f.ws_b, &f.unscoped] {
+            assert!(ensure_in_scope(&f.db, t, &sc).is_ok());
+        }
     }
 }

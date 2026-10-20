@@ -24,7 +24,8 @@ struct Cli {
     #[arg(long, global = true, env = "TACKS_WORKSPACE")]
     workspace: Option<PathBuf>,
 
-    /// Which tasks list-type commands cover: current workspace, whole project, or everything
+    /// Which tasks list-type commands cover: current workspace, project backlog, whole
+    /// project (workspaces plus backlog), or everything
     #[arg(long, global = true, value_enum, default_value = "workspace")]
     scope: ScopeMode,
 
@@ -60,6 +61,9 @@ enum Commands {
         /// Parent task ID (creates subtask)
         #[arg(long)]
         parent: Option<String>,
+        /// Create the task in the current project's backlog instead of the workspace
+        #[arg(long)]
+        to_backlog: bool,
     },
     /// List tasks (default: open tasks)
     List {
@@ -135,6 +139,9 @@ enum Commands {
         /// Move the task and its subtasks to another workspace (path, or "none" for unscoped)
         #[arg(long)]
         move_to: Option<String>,
+        /// Move the task and its subtasks to the project backlog (no workspace)
+        #[arg(long)]
+        to_backlog: bool,
     },
     /// Close a task
     Close {
@@ -256,6 +263,7 @@ fn main() {
             description,
             tags,
             parent,
+            to_backlog,
         } => commands::create::run(
             &db_path,
             &title,
@@ -263,6 +271,7 @@ fn main() {
             description.as_deref(),
             tags.as_deref(),
             parent.as_deref(),
+            to_backlog,
             &scope,
             cli.json,
         ),
@@ -299,6 +308,7 @@ fn main() {
             notes,
             parent,
             move_to,
+            to_backlog,
         } => commands::update::run(
             &db_path,
             &id,
@@ -313,6 +323,7 @@ fn main() {
             notes.as_deref(),
             parent.as_deref(),
             move_to.as_deref(),
+            to_backlog,
             &scope,
             cli.json,
         ),

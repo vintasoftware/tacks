@@ -260,6 +260,11 @@ fn add(out: &mut Vec<String>, s: String) {
     }
 }
 
+/// `--scope` values that reach outside the current workspace.
+fn is_wide_scope(v: &str) -> bool {
+    matches!(v, "backlog" | "project" | "all")
+}
+
 /// Inspect the words of a `tk` invocation (after the `tk` word) for flags that
 /// reach outside the current workspace.
 fn tk_flag_triggers(args: &[&str], out: &mut Vec<String>) {
@@ -268,12 +273,12 @@ fn tk_flag_triggers(args: &[&str], out: &mut Vec<String>) {
         let a = args[i];
         if a == "--scope" {
             if let Some(&v) = args.get(i + 1)
-                && (v == "project" || v == "all")
+                && is_wide_scope(v)
             {
                 add(out, format!("--scope {v}"));
             }
         } else if let Some(v) = a.strip_prefix("--scope=") {
-            if v == "project" || v == "all" {
+            if is_wide_scope(v) {
                 add(out, format!("--scope {v}"));
             }
         } else if a == "--workspace" || a.starts_with("--workspace=") {
@@ -463,7 +468,23 @@ mod tests {
         assert_eq!(t("tk list --scope all"), ["--scope all"]);
         assert_eq!(t("tk list --scope project"), ["--scope project"]);
         assert_eq!(t("tk --scope=all ready"), ["--scope all"]);
+        assert_eq!(t("tk list --scope backlog"), ["--scope backlog"]);
+        assert_eq!(t("tk --scope=backlog ready"), ["--scope backlog"]);
+        assert_eq!(
+            t("tk update X --claim --scope backlog"),
+            ["--scope backlog"]
+        );
+        assert_eq!(t("bash -c 'tk list --scope backlog'"), ["--scope backlog"]);
         assert_eq!(t("/usr/local/bin/tk list --scope all"), ["--scope all"]);
+    }
+
+    #[test]
+    fn to_backlog_does_not_trigger() {
+        assert!(t("tk create X --to-backlog").is_empty());
+        assert!(t("tk update X --to-backlog").is_empty());
+        assert!(t("tk update X --to-backlog --scope workspace").is_empty());
+        assert!(t("tk update X --scope=workspace --to-backlog").is_empty());
+        assert!(t(r#"tk comment X "use --scope backlog""#).is_empty());
     }
 
     #[test]
