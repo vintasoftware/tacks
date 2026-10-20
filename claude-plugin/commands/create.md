@@ -7,7 +7,7 @@ Run `tk create <title>` to create a new task. Optionally specify priority, descr
 ## Usage
 
 ```bash
-tk create "Title" [-p <priority>] [-d <description>] [-t <tags>] [--parent <id>]
+tk create "Title" [-p <priority>] [-d <description>] [-t <tags>] [--parent <id>] [--to-backlog]
 ```
 
 ## Flags
@@ -18,6 +18,7 @@ tk create "Title" [-p <priority>] [-d <description>] [-t <tags>] [--parent <id>]
 | `-d <description>` | Longer description for the task, as markdown (rendered in the web UI) |
 | `-t <tags>` | Comma-separated tags (e.g., `backend,api`) |
 | `--parent <id>` | Parent task ID — makes this a subtask (e.g., `tk-a1b2`) |
+| `--to-backlog` | Park the task in the project backlog (no workspace) instead of this workspace. Cannot be combined with `--parent` |
 
 ## Instructions
 
@@ -45,6 +46,9 @@ Users can only sign in with a password.
 EOF
 )" --json
 
+# Park out-of-scope work in the project backlog
+tk create "Refactor the auth module" --to-backlog --json
+
 # Create a subtask under an epic
 tk create "Write unit tests" --parent tk-a1b2 --json
 ```
@@ -52,6 +56,7 @@ tk create "Write unit tests" --parent tk-a1b2 --json
 ## Notes
 
 - Write the description for the human reviewer, who reads it in the web UI without your context: Context, Approach, Done when (checklist), Open questions.
+- Found work that does not belong to this workspace? File it with `--to-backlog` instead of doing it. Another workspace (or the user) takes it later.
 - Task IDs are hash-based: `tk-XXXX` format.
 - Subtask IDs use hierarchical format: `tk-a1b2.1`, `tk-a1b2.2`, etc.
 - When `--parent` is used, the parent task is automatically tagged as `epic` if it isn't already.

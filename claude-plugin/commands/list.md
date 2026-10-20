@@ -7,7 +7,7 @@ Run `tk list` to view open tasks. Apply filters to narrow by status, priority, t
 ## Usage
 
 ```bash
-tk list [-a] [-s <status>] [-p <priority>] [-t <tag>] [--parent <id>] [--scope project|all] [--workspace <path>] [--json]
+tk list [-a] [-s <status>] [-p <priority>] [-t <tag>] [--parent <id>] [--scope backlog|project|all] [--workspace <path>] [--json]
 ```
 
 ## Flags
@@ -19,7 +19,7 @@ tk list [-a] [-s <status>] [-p <priority>] [-t <tag>] [--parent <id>] [--scope p
 | `-p <priority>` | Filter by priority level (e.g., `-p 1` for P1 tasks) |
 | `-t <tag>` | Filter by tag (e.g., `-t backend`) |
 | `--parent <id>` | Show only children of the given task ID |
-| `--scope project|all` | Global flag: widen from the current workspace to the whole project, or to every workspace |
+| `--scope backlog|project|all` | Global flag: widen from the current workspace to the project backlog (tasks in no workspace), the whole project (workspaces plus backlog), or every workspace. Use only when the user asks |
 | `--workspace <path>` | Global flag: list another workspace instead of the current one |
 
 ## Instructions

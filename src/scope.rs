@@ -60,6 +60,17 @@ impl Scope {
         }
     }
 
+    /// Read-only lookup of the current project, if it is registered.
+    ///
+    /// `None` when the scope cannot be tied to a project (outside a git repository) or the
+    /// project has never been registered.
+    pub fn current_project(&self, db: &Database) -> Result<Option<Project>, String> {
+        match self.resolve()? {
+            Some(r) => find_project(db, &r.project_path),
+            None => Ok(None),
+        }
+    }
+
     /// Translate the scope into a query filter without registering anything.
     ///
     /// `--scope backlog` needs a resolvable workspace (to find the project) and fails with

@@ -7,7 +7,7 @@ Run `tk prime` to get a compact, AI-optimized snapshot of the current backlog st
 ## Usage
 
 ```bash
-tk prime [--scope project|all] [--workspace <path>] [--json]
+tk prime [--scope backlog|project|all] [--workspace <path>] [--json]
 ```
 
 ## Instructions
@@ -17,6 +17,7 @@ tk prime [--scope project|all] [--workspace <path>] [--json]
    - **stats**: How many tasks are open, in-progress, done?
    - **in_progress**: What is currently being worked on?
    - **ready**: What unblocked tasks are available to pick up next?
+   - **backlog**: Counts for the project backlog (`project_id`, `open`, `in_progress`, `blocked`), or `null` outside a project. The human output shows a line when it has open tasks. Do not take backlog tasks unless the user asks (`tk update <id> --claim --scope backlog`).
    - **user_feedback**: Comments the user left on tasks that nobody has answered yet. Treat them as instructions for that task: address them, then reply with `tk comment <id> "..."`.
 3. Use this information to make decisions about what to work on and report status to the user.
 

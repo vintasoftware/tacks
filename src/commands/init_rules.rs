@@ -10,11 +10,11 @@ Run `tk prime` at the start of each session to get context: backlog stats, in-pr
 ## Command Reference
 
 ```
-tk create <title> [-p priority] [-d markdown] [-t tags] [--parent id]
+tk create <title> [-p priority] [-d markdown] [-t tags] [--parent id] [--to-backlog]
 tk list [-s status] [-p pri] [-t tag] [--parent id]
 tk ready [--limit N]
 tk show <id>
-tk update <id> [fields...] [--claim] [--notes text] [--parent id|none]
+tk update <id> [fields...] [--claim] [--notes text] [--parent id|none] [--to-backlog]
 tk close <id> [-c comment] [-r reason] [--force]
 tk dep add|remove <child> <parent>
 tk comment <id> <body> [--author name]
@@ -33,9 +33,17 @@ Tasks are scoped automatically to the current git worktree (workspace) in one gl
 ## Workspace boundaries
 
 - Work only on tasks of your current workspace. Write commands (`update`, `close`, `comment`, `dep`, `create --parent`) refuse tasks of other workspaces.
-- Never use `--scope project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace.
+- Never use `--scope backlog|project|all`, `--workspace`, `TACKS_WORKSPACE`, `--db`/`TACKS_DB` or `--move-to` unless the user explicitly asked for that task or workspace.
 - If a task you need belongs elsewhere, tell the user instead of acting on it.
 - Reading other workspaces' tasks with `tk show <id>` is fine.
+
+## Project backlog
+
+The project backlog holds tasks that belong to no workspace yet. `tk prime` shows a line when it has open tasks.
+
+- Found work that is out of scope for this workspace? Park it in the backlog: `tk create <title> --to-backlog`, or `tk update <id> --to-backlog` for an existing task. Do not do it yourself and do not use `--move-to`.
+- Do not take backlog tasks on your own. Take one only when the user asks: `tk update <id> --claim --scope backlog` (it moves the task into this workspace).
+- Look at the backlog (`tk list --scope backlog`) only when the user asks.
 
 ## Workflow
 
@@ -166,5 +174,14 @@ mod tests {
         assert!(RULES_CONTENT.contains("markdown"));
         assert!(RULES_CONTENT.contains("## Blocked"));
         assert!(RULES_CONTENT.contains("recommendation"));
+    }
+
+    #[test]
+    fn test_rules_describe_project_backlog() {
+        assert!(RULES_CONTENT.contains("## Project backlog"));
+        assert!(RULES_CONTENT.contains("tk create <title> --to-backlog"));
+        assert!(RULES_CONTENT.contains("tk update <id> --to-backlog"));
+        assert!(RULES_CONTENT.contains("tk update <id> --claim --scope backlog"));
+        assert!(RULES_CONTENT.contains("`--scope backlog|project|all`"));
     }
 }

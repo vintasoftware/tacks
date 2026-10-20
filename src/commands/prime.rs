@@ -1,17 +1,17 @@
 use std::path::Path;
 
-use crate::db::Database;
+use crate::db::{BacklogTaskCounts, Database};
 use crate::models::{PendingComment, Task};
 use crate::scope::{Scope, ScopeMode};
 
 const READY_LIMIT: u32 = 5;
 
 const COMMAND_REFERENCE: &[&str] = &[
-    "tk create <title> [-p priority] [-d markdown] [-t tags] [--parent id]",
+    "tk create <title> [-p priority] [-d markdown] [-t tags] [--parent id] [--to-backlog]",
     "tk list [-s status] [-p pri] [-t tag] [--json]",
     "tk ready [--limit N] [--json]",
     "tk show <id> [--json]",
-    "tk update <id> [fields...] [--claim]",
+    "tk update <id> [fields...] [--claim] [--to-backlog]",
     "tk close <id> [-c comment] (refused while user comments are unanswered)",
     "tk dep add|remove <child> <parent>",
     "tk comment <id> <body> (reply to user feedback with it)",
@@ -19,7 +19,8 @@ const COMMAND_REFERENCE: &[&str] = &[
     "Write descriptions for the user to review and decide; when blocked, set -s blocked and add a '## Blocked' section (cause, tried, decision needed, options, recommendation)",
     "tk stats [--oneline] [--json]",
     "tk workspaces [--json]",
-    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope project|all to widen (reads only; do not use it for writes unless the user asked)",
+    "Scope: list/ready/stats/blocked/epic/prime cover the current workspace; add --scope backlog|project|all to widen (reads only; do not use it for writes unless the user asked)",
+    "Backlog: park work that does not belong to this workspace (out-of-scope findings) with tk create <title> --to-backlog or tk update <id> --to-backlog; take a backlog task only when the user asks (tk update <id> --claim --scope backlog)",
 ];
 
 /// Run the `tk prime` command.
@@ -67,11 +68,32 @@ pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
     )?;
     let ready = db.get_ready_tasks(Some(READY_LIMIT), &filter)?;
     let feedback = db.pending_user_comments(&filter)?;
+    let backlog = backlog_counts(&db, scope)?;
 
     let result = if json {
-        print_json(&by_status, &in_progress, &ready, &feedback)
+        print_json(
+            &by_status,
+            &in_progress,
+            &ready,
+            &feedback,
+            backlog.as_ref(),
+        )
     } else {
-        print_markdown(&by_status, &in_progress, &ready, &feedback)
+        // The backlog line only appears in the default workspace scope: with
+        // `--scope backlog|project|all` the backlog tasks are already listed (or it
+        // would be redundant).
+        let backlog_line = if scope.mode == ScopeMode::Workspace {
+            backlog.as_ref().and_then(backlog_line)
+        } else {
+            None
+        };
+        print_markdown(
+            &by_status,
+            &in_progress,
+            &ready,
+            &feedback,
+            backlog_line.as_deref(),
+        )
     };
 
     // The feedback is now in the agent's context: stop the hook from repeating it.
@@ -82,11 +104,44 @@ pub fn run(db_path: &Path, scope: &Scope, json: bool) -> Result<(), String> {
     result
 }
 
+/// Backlog counts of the current project (zeros when its backlog is empty).
+///
+/// `None` when there is no registered current project (outside git, or never registered).
+fn backlog_counts(db: &Database, scope: &Scope) -> Result<Option<BacklogTaskCounts>, String> {
+    let Some(project) = scope.current_project(db)? else {
+        return Ok(None);
+    };
+    let counts = db
+        .backlog_task_counts()?
+        .into_iter()
+        .find(|c| c.project_id == project.id);
+    Ok(Some(counts.unwrap_or(BacklogTaskCounts {
+        project_id: project.id,
+        open: 0,
+        in_progress: 0,
+        blocked: 0,
+        done: 0,
+    })))
+}
+
+/// The one-line backlog hint, or `None` when the backlog has no tasks that are not done.
+fn backlog_line(counts: &BacklogTaskCounts) -> Option<String> {
+    let n = counts.open + counts.in_progress + counts.blocked;
+    if n == 0 {
+        return None;
+    }
+    let noun = if n == 1 { "task" } else { "tasks" };
+    Some(format!(
+        "Project backlog: {n} open {noun} (tk list --scope backlog; take one only when the user asks: tk update <id> --claim --scope backlog)"
+    ))
+}
+
 fn print_markdown(
     by_status: &[(String, i64)],
     in_progress: &[Task],
     ready: &[Task],
     feedback: &[PendingComment],
+    backlog_line: Option<&str>,
 ) -> Result<(), String> {
     println!("# Tacks: Project Status");
 
@@ -118,6 +173,9 @@ fn print_markdown(
     } else {
         let parts: Vec<String> = by_status.iter().map(|(s, c)| format!("{c} {s}")).collect();
         println!("{}", parts.join(", "));
+    }
+    if let Some(line) = backlog_line {
+        println!("{line}");
     }
 
     // In Progress section
@@ -161,6 +219,7 @@ fn print_json(
     in_progress: &[Task],
     ready: &[Task],
     feedback: &[PendingComment],
+    backlog: Option<&BacklogTaskCounts>,
 ) -> Result<(), String> {
     // Build a stats object with the four canonical statuses always present.
     let mut stats = serde_json::Map::new();
@@ -191,7 +250,18 @@ fn print_json(
         })
         .collect();
 
+    // Additive key: backlog counts of the current project, null without a registered project.
+    let backlog = backlog.map(|c| {
+        serde_json::json!({
+            "project_id": c.project_id,
+            "open": c.open,
+            "in_progress": c.in_progress,
+            "blocked": c.blocked,
+        })
+    });
+
     let out = serde_json::json!({
+        "backlog": backlog,
         "user_feedback": user_feedback,
         "stats": stats,
         "in_progress": in_progress,
@@ -209,6 +279,7 @@ fn print_json(
 
 #[cfg(test)]
 mod tests {
+    use super::{BacklogTaskCounts, backlog_line};
     use assert_cmd::Command;
     use serde_json::Value;
     use tempfile::TempDir;
@@ -370,5 +441,114 @@ mod tests {
 
         // stats should show 1 in_progress
         assert_eq!(json["stats"]["in_progress"], 1);
+    }
+
+    /// A git repository in a temp dir, with `tk` calls run from inside it.
+    fn repo(tmp: &TempDir) -> std::path::PathBuf {
+        let dir = tmp.path().join("repo");
+        std::fs::create_dir(&dir).unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git init failed");
+        dir
+    }
+
+    fn tk_in(tmp: &TempDir, dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+        tk(tmp).current_dir(dir).args(args).output().unwrap()
+    }
+
+    #[test]
+    fn test_backlog_line_counts_and_plural() {
+        let mut c = BacklogTaskCounts {
+            project_id: 1,
+            open: 0,
+            in_progress: 0,
+            blocked: 0,
+            done: 4,
+        };
+        assert_eq!(backlog_line(&c), None, "done tasks do not count");
+        c.open = 1;
+        let one = backlog_line(&c).unwrap();
+        assert!(one.starts_with("Project backlog: 1 open task ("), "{one}");
+        c.blocked = 2;
+        let three = backlog_line(&c).unwrap();
+        assert!(
+            three.starts_with("Project backlog: 3 open tasks (tk list --scope backlog;"),
+            "{three}"
+        );
+        assert!(three.contains("tk update <id> --claim --scope backlog"));
+    }
+
+    #[test]
+    fn test_prime_backlog_line_and_json() {
+        let tmp = TempDir::new().unwrap();
+        init_db(&tmp);
+        let dir = repo(&tmp);
+
+        // register the workspace; empty backlog: no line, zero counts
+        assert!(tk_in(&tmp, &dir, &["create", "Own task"]).status.success());
+        let out = tk_in(&tmp, &dir, &["prime"]);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(!stdout.contains("Project backlog"), "{stdout}");
+        let out = tk_in(&tmp, &dir, &["--json", "prime"]);
+        let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(json["backlog"]["open"], 0);
+        assert!(json["backlog"]["project_id"].is_number());
+
+        assert!(
+            tk_in(&tmp, &dir, &["create", "Parked", "--to-backlog"])
+                .status
+                .success()
+        );
+        let out = tk_in(&tmp, &dir, &["prime"]);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("Project backlog: 1 open task ("),
+            "{stdout}"
+        );
+        // the line sits in the stats part, before the in-progress section
+        let line = stdout.find("Project backlog").unwrap();
+        assert!(line > stdout.find("## Stats").unwrap());
+        assert!(line < stdout.find("## In Progress").unwrap());
+
+        // the line only shows in workspace scope
+        for scope in ["backlog", "project", "all"] {
+            let out = tk_in(&tmp, &dir, &["--scope", scope, "prime"]);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(!stdout.contains("Project backlog"), "{scope}: {stdout}");
+        }
+
+        let out = tk_in(&tmp, &dir, &["--json", "prime"]);
+        let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(json["backlog"]["open"], 1);
+        assert_eq!(json["backlog"]["in_progress"], 0);
+        assert_eq!(json["backlog"]["blocked"], 0);
+        // stats still cover the workspace only
+        assert_eq!(json["stats"]["open"], 1);
+    }
+
+    #[test]
+    fn test_prime_json_backlog_null_without_project() {
+        let tmp = TempDir::new().unwrap();
+        init_db(&tmp);
+        // a directory that is not a git repository
+        let dir = tmp.path().join("plain");
+        std::fs::create_dir(&dir).unwrap();
+        let out = tk_in(&tmp, &dir, &["--json", "--scope", "all", "prime"]);
+        let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(json["backlog"].is_null(), "{json}");
+    }
+
+    #[test]
+    fn test_prime_command_reference_mentions_backlog() {
+        assert!(
+            super::COMMAND_REFERENCE
+                .iter()
+                .any(|l| l.contains("--to-backlog") && l.contains("--scope backlog"))
+        );
     }
 }

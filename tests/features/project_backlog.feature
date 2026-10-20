@@ -463,6 +463,139 @@ Feature: Project backlog
     Then the JSON output lists exactly the titles ""
 
   # ---------------------------------------------------------------------------
+  # prime
+  # ---------------------------------------------------------------------------
+
+  Scenario: prime shows the backlog count of the project in the stats section
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked one' --to-backlog" in "A"
+    And I run tk "--json create 'Parked two' --to-backlog" in "A"
+    And I run tk "--json create 'Task in B'" in "B"
+    When I run tk "prime" in "B"
+    Then the tk command succeeds
+    And the tk output has the line "Project backlog: 2 open tasks (tk list --scope backlog; take one only when the user asks: tk update <id> --claim --scope backlog)" directly under the stats line
+
+  Scenario: prime uses the singular for a backlog with one task
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked' --to-backlog" in "A"
+    When I run tk "prime" in "A"
+    Then the tk command succeeds
+    And the tk output has the line "Project backlog: 1 open task (tk list" directly under the stats line
+
+  Scenario: prime does not count done backlog tasks
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked done' --to-backlog" in "A" and save the id as "done"
+    And I run tk "--json create 'Parked open' --to-backlog" in "A"
+    And I run tk "--scope backlog close @id(done)" in "A"
+    When I run tk "prime" in "A"
+    Then the tk output has the line "Project backlog: 1 open task (" directly under the stats line
+
+  Scenario: prime counts in_progress and blocked backlog tasks
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked open' --to-backlog" in "A"
+    And I run tk "--json create 'Parked started' --to-backlog" in "A" and save the id as "started"
+    And I run tk "--json create 'Parked blocked' --to-backlog" in "A" and save the id as "blocked"
+    And I run tk "--scope backlog update @id(started) -s in_progress" in "A"
+    And I run tk "--scope backlog update @id(blocked) -s blocked" in "A"
+    When I run tk "prime" in "A"
+    Then the tk output has the line "Project backlog: 3 open tasks (" directly under the stats line
+
+  Scenario: prime hides the backlog line when the backlog only has done tasks
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked' --to-backlog" in "A" and save the id as "parked"
+    And I run tk "--scope backlog close @id(parked)" in "A"
+    When I run tk "prime" in "A"
+    Then the tk command succeeds
+    And the tk output contains "## Stats"
+    And the tk output does not contain "Project backlog"
+
+  Scenario: prime hides the backlog line when the backlog is empty
+    Given I run tk "--json create 'Workspace task'" in "A"
+    When I run tk "prime" in "A"
+    Then the tk command succeeds
+    And the tk output contains "## Stats"
+    And the tk output does not contain "Project backlog"
+
+  Scenario: prime does not show the backlog of another project
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked elsewhere' --to-backlog" in "C"
+    When I run tk "prime" in "A"
+    Then the tk command succeeds
+    And the tk output does not contain "Project backlog"
+
+  Scenario Outline: prime hides the backlog line with --scope <scope>
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked' --to-backlog" in "A"
+    When I run tk "--scope <scope> prime" in "A"
+    Then the tk command succeeds
+    And the tk output contains "## Stats"
+    And the tk output does not contain "Project backlog"
+
+    Examples:
+      | scope   |
+      | backlog |
+      | project |
+      | all     |
+
+  Scenario: prime --json reports the backlog counts of the project
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked open' --to-backlog" in "A"
+    And I run tk "--json create 'Parked started' --to-backlog" in "A" and save the id as "started"
+    And I run tk "--json create 'Parked blocked' --to-backlog" in "A" and save the id as "blocked"
+    And I run tk "--json create 'Parked done' --to-backlog" in "A" and save the id as "done"
+    And I run tk "--scope backlog update @id(started) -s in_progress" in "A"
+    And I run tk "--scope backlog update @id(blocked) -s blocked" in "A"
+    And I run tk "--scope backlog close @id(done)" in "A"
+    And I run tk "--json create 'Task in B'" in "B"
+    When I run tk "--json prime" in "B"
+    Then the tk command succeeds
+    And the JSON output path "backlog.project_id" equals "@project(A)"
+    And the JSON output path "backlog.open" equals "1"
+    And the JSON output path "backlog.in_progress" equals "1"
+    And the JSON output path "backlog.blocked" equals "1"
+    And the JSON output path "stats.open" equals "1"
+    And the JSON output path "ready.0.title" equals "Task in B"
+
+  Scenario: prime --json reports zero backlog counts for a project with an empty backlog
+    Given I run tk "--json create 'Workspace task'" in "A"
+    When I run tk "--json prime" in "A"
+    Then the tk command succeeds
+    And the JSON output path "backlog.project_id" equals "@project(A)"
+    And the JSON output path "backlog.open" equals "0"
+    And the JSON output path "backlog.in_progress" equals "0"
+    And the JSON output path "backlog.blocked" equals "0"
+
+  Scenario: prime --json reports the backlog also with --scope project
+    Given I run tk "--json create 'Workspace task'" in "A"
+    And I run tk "--json create 'Parked' --to-backlog" in "A"
+    When I run tk "--json --scope project prime" in "A"
+    Then the JSON output path "backlog.project_id" equals "@project(A)"
+    And the JSON output path "backlog.open" equals "1"
+
+  Scenario: prime --json has a null backlog outside a git repository
+    Given I run tk "--json create 'Loose task'" in "nogit"
+    And I run tk "--json create 'Parked' --to-backlog" in "A"
+    When I run tk "--json prime" in "nogit"
+    Then the tk command succeeds
+    And the JSON output path "backlog" equals "null"
+    And the JSON output path "stats.open" equals "1"
+
+  Scenario: prime --json keeps its existing keys
+    Given I run tk "--json create 'Workspace task'" in "A"
+    When I run tk "--json prime" in "A"
+    Then the JSON output path "stats.open" equals "1"
+    And the JSON output path "in_progress" equals "[]"
+    And the JSON output path "user_feedback" equals "[]"
+    And the JSON output path "ready.0.title" equals "Workspace task"
+
+  Scenario: prime stays silent in a workspace that never used tacks
+    Given I run tk "--json create 'Parked' --to-backlog" in "A"
+    When I run tk "prime" in "D"
+    Then the tk output is empty
+    When I run tk "--json prime" in "D"
+    Then the tk output is empty
+
+  # ---------------------------------------------------------------------------
   # Hook
   # ---------------------------------------------------------------------------
 
