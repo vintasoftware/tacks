@@ -9,54 +9,76 @@ use crate::models::{
 };
 
 /// Latest schema version known to this build.
-const LATEST_SCHEMA_VERSION: i32 = 6;
+const LATEST_SCHEMA_VERSION: i32 = 7;
 
 /// Which tasks a list-type query should cover.
+///
+/// A task is in a workspace (`workspace_id` set, `project_id` set), in a project
+/// backlog (`workspace_id IS NULL`, `project_id` set) or unscoped (both NULL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeFilter {
     /// Every task in the database.
     All,
-    /// Tasks whose workspace belongs to the given project id.
+    /// Tasks whose workspace belongs to the given project id, plus the project's backlog.
     Project(i64),
     /// Tasks in exactly the given workspace id.
     Workspace(i64),
-    /// Tasks with no workspace (`workspace_id IS NULL`).
+    /// Backlog tasks of the given project id (`workspace_id IS NULL AND project_id = ?`).
+    Backlog(i64),
+    /// Tasks with neither workspace nor project (`workspace_id IS NULL AND project_id IS NULL`).
+    /// Backlog tasks are not unscoped.
     Unscoped,
-    /// Every task except those of archived workspaces (unscoped tasks stay visible).
-    /// Used by the web UI; the CLI uses `All`.
+    /// Every task except those of archived workspaces (unscoped and backlog tasks stay
+    /// visible). Used by the web UI; the CLI uses `All`.
     AllVisible,
-    /// Like `Project`, but skips archived workspaces of the project.
+    /// Like `Project`, but skips archived workspaces of the project (the backlog stays).
     ProjectVisible(i64),
     /// Matches no task at all (e.g. a scope that is registered nowhere).
     Nothing,
 }
 
 impl ScopeFilter {
-    /// Build a SQL condition on `column` (e.g. `t.workspace_id`) using positional
-    /// parameter `?{idx}` when a value needs binding. Returns `None` for `All`.
-    /// The bound value, if any, is returned alongside the condition.
-    fn condition(&self, column: &str, idx: usize) -> Option<(String, Option<i64>)> {
+    /// Build a SQL condition over the `workspace_id` / `project_id` columns of `tasks`,
+    /// using positional parameter `?{idx}` when a value needs binding. Returns `None`
+    /// for `All`. The bound value, if any, is returned alongside the condition.
+    ///
+    /// `prefix` is prepended to the column names: `""` for an unaliased `tasks` table,
+    /// or the table alias with its dot (e.g. `"t."`). The condition is always
+    /// parenthesized, so it can be joined with `AND`.
+    fn condition(&self, prefix: &str, idx: usize) -> Option<(String, Option<i64>)> {
+        let ws = format!("{prefix}workspace_id");
+        let proj = format!("{prefix}project_id");
         match self {
             ScopeFilter::All => None,
-            ScopeFilter::Unscoped => Some((format!("{column} IS NULL"), None)),
+            ScopeFilter::Unscoped => Some((format!("({ws} IS NULL AND {proj} IS NULL)"), None)),
             ScopeFilter::Nothing => Some(("1 = 0".to_string(), None)),
             ScopeFilter::AllVisible => Some((
                 format!(
-                    "({column} IS NULL OR {column} NOT IN \
+                    "({ws} IS NULL OR {ws} NOT IN \
                      (SELECT id FROM workspaces WHERE archived_at IS NOT NULL))"
                 ),
                 None,
             )),
+            // Workspace tasks are matched through the workspace row rather than
+            // `project_id`, so rows written by an older binary (which leaves
+            // `project_id` NULL) still belong to their project.
             ScopeFilter::ProjectVisible(id) => Some((
                 format!(
-                    "{column} IN (SELECT id FROM workspaces \
-                     WHERE project_id = ?{idx} AND archived_at IS NULL)"
+                    "({ws} IN (SELECT id FROM workspaces \
+                     WHERE project_id = ?{idx} AND archived_at IS NULL) \
+                     OR ({ws} IS NULL AND {proj} = ?{idx}))"
                 ),
                 Some(*id),
             )),
-            ScopeFilter::Workspace(id) => Some((format!("{column} = ?{idx}"), Some(*id))),
+            ScopeFilter::Workspace(id) => Some((format!("({ws} = ?{idx})"), Some(*id))),
+            ScopeFilter::Backlog(id) => {
+                Some((format!("({ws} IS NULL AND {proj} = ?{idx})"), Some(*id)))
+            }
             ScopeFilter::Project(id) => Some((
-                format!("{column} IN (SELECT id FROM workspaces WHERE project_id = ?{idx})"),
+                format!(
+                    "({ws} IN (SELECT id FROM workspaces WHERE project_id = ?{idx}) \
+                     OR ({ws} IS NULL AND {proj} = ?{idx}))"
+                ),
                 Some(*id),
             )),
         }
@@ -75,6 +97,24 @@ pub struct WorkspaceTaskCounts {
 }
 
 impl WorkspaceTaskCounts {
+    /// Total number of tasks across all statuses.
+    pub fn total(&self) -> i64 {
+        self.open + self.in_progress + self.blocked + self.done
+    }
+}
+
+/// Task counts of one project's backlog (tasks with `workspace_id IS NULL` and the
+/// project's `project_id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BacklogTaskCounts {
+    pub project_id: i64,
+    pub open: i64,
+    pub in_progress: i64,
+    pub blocked: i64,
+    pub done: i64,
+}
+
+impl BacklogTaskCounts {
     /// Total number of tasks across all statuses.
     pub fn total(&self) -> i64 {
         self.open + self.in_progress + self.blocked + self.done
@@ -218,12 +258,24 @@ impl Database {
 
     // -- Tasks --
 
+    /// Insert a task, keeping `project_id` in sync with `workspace_id`.
+    ///
+    /// - With a workspace, `project_id` is always the workspace's project (the value in
+    ///   `task.project_id` is ignored).
+    /// - Without a workspace, `task.project_id` places the task in that project's backlog;
+    ///   `None` leaves it unscoped. A subtask of a backlog parent that carries neither
+    ///   inherits the parent's project, so subtasks stay with their parent.
     pub fn insert_task(&self, task: &Task) -> Result<(), String> {
         let tags_str = task.tags.join(",");
         self.conn
             .execute(
-                "INSERT INTO tasks (id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT INTO tasks (id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id, project_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                         COALESCE(
+                             (SELECT project_id FROM workspaces WHERE id = ?13),
+                             ?14,
+                             (SELECT p.project_id FROM tasks p
+                              WHERE p.id = ?7 AND p.workspace_id IS NULL)))",
                 params![
                     task.id,
                     task.title,
@@ -238,17 +290,31 @@ impl Database {
                     task.close_reason,
                     task.notes,
                     task.workspace_id,
+                    task.project_id,
                 ],
             )
             .map_err(|e| format!("failed to insert task: {e}"))?;
         Ok(())
     }
 
+    /// Insert a task directly into the backlog of `project_id` (`workspace_id = NULL`,
+    /// `project_id = P`), overriding any placement carried by `task`. Fails when the
+    /// project does not exist; nothing is written in that case.
+    pub fn insert_backlog_task(&self, task: &Task, project_id: i64) -> Result<(), String> {
+        if self.get_project(project_id)?.is_none() {
+            return Err(format!("project not found: {project_id}"));
+        }
+        let mut placed = task.clone();
+        placed.workspace_id = None;
+        placed.project_id = Some(project_id);
+        self.insert_task(&placed)
+    }
+
     pub fn get_task(&self, id: &str) -> Result<Option<Task>, String> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id
+                "SELECT id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id, project_id
                  FROM tasks WHERE id = ?1",
             )
             .map_err(|e| format!("query error: {e}"))?;
@@ -287,7 +353,7 @@ impl Database {
         scope: &ScopeFilter,
     ) -> Result<Vec<Task>, String> {
         let mut sql = String::from(
-            "SELECT id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id FROM tasks WHERE 1=1",
+            "SELECT id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id, project_id FROM tasks WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut param_idx = 1;
@@ -336,7 +402,7 @@ impl Database {
             param_idx += 1;
         }
 
-        if let Some((cond, value)) = scope.condition("workspace_id", param_idx) {
+        if let Some((cond, value)) = scope.condition("", param_idx) {
             sql.push_str(&format!(" AND {cond}"));
             if let Some(v) = value {
                 param_values.push(Box::new(v));
@@ -439,7 +505,7 @@ impl Database {
         notes: Option<&str>,
         new_parent: Option<Option<&str>>,
     ) -> Result<(), String> {
-        let mut new_parent_workspace: Option<Option<i64>> = None;
+        let mut new_parent_placement: Option<(Option<i64>, Option<i64>)> = None;
         let mut sets = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut idx = 1;
@@ -496,7 +562,7 @@ impl Database {
                         .ok_or_else(|| format!("parent task not found: {new_pid}"))?;
                     // Validate: new parent must not itself be a subtask (max depth 1)
                     let parent_task = self.get_task(new_pid)?.unwrap();
-                    new_parent_workspace = Some(parent_task.workspace_id);
+                    new_parent_placement = Some((parent_task.workspace_id, parent_task.project_id));
                     if parent_task.parent_id.is_some() {
                         return Err(format!(
                             "cannot reparent under {new_pid}: it is already a subtask (max depth is 1)"
@@ -556,9 +622,9 @@ impl Database {
         if rows_changed == 0 {
             return Err(format!("task not found: {id}"));
         }
-        // Subtasks live in their parent's workspace: move the task and its subtree.
-        if let Some(ws) = new_parent_workspace {
-            self.set_task_workspace(id, ws)?;
+        // Subtasks live in their parent's workspace (or backlog): move the task and its subtree.
+        if let Some((ws, backlog_project)) = new_parent_placement {
+            self.set_subtree_placement(id, ws, backlog_project)?;
         }
         Ok(())
     }
@@ -699,7 +765,7 @@ impl Database {
             .conn
             .prepare(
                 "SELECT t.id, t.title, t.description, t.status, t.priority, t.assignee,
-                        t.parent_id, t.tags, t.created_at, t.updated_at, t.close_reason, t.notes, t.workspace_id
+                        t.parent_id, t.tags, t.created_at, t.updated_at, t.close_reason, t.notes, t.workspace_id, t.project_id
                  FROM tasks t
                  JOIN dependencies d ON t.id = d.child_id
                  WHERE d.parent_id = ?1
@@ -725,13 +791,13 @@ impl Database {
         limit: Option<u32>,
         scope: &ScopeFilter,
     ) -> Result<Vec<Task>, String> {
-        let (scope_sql, scope_val) = match scope.condition("t.workspace_id", 1) {
+        let (scope_sql, scope_val) = match scope.condition("t.", 1) {
             Some((c, v)) => (format!(" AND {c}"), v),
             None => (String::new(), None),
         };
         let mut sql = String::from(
             "
-            SELECT t.id, t.title, t.description, t.status, t.priority, t.assignee, t.parent_id, t.tags, t.created_at, t.updated_at, t.close_reason, t.notes, t.workspace_id
+            SELECT t.id, t.title, t.description, t.status, t.priority, t.assignee, t.parent_id, t.tags, t.created_at, t.updated_at, t.close_reason, t.notes, t.workspace_id, t.project_id
             FROM tasks t
             WHERE t.status = 'open'
               {SCOPE}
@@ -771,13 +837,13 @@ impl Database {
 
     /// Get tasks that have at least one open/in_progress blocker.
     pub fn get_blocked_tasks(&self, scope: &ScopeFilter) -> Result<Vec<Task>, String> {
-        let (scope_sql, scope_val) = match scope.condition("t.workspace_id", 1) {
+        let (scope_sql, scope_val) = match scope.condition("t.", 1) {
             Some((c, v)) => (format!(" AND {c}"), v),
             None => (String::new(), None),
         };
         let sql = format!(
             "SELECT DISTINCT t.id, t.title, t.description, t.status, t.priority, t.assignee,
-                    t.parent_id, t.tags, t.created_at, t.updated_at, t.close_reason, t.notes, t.workspace_id
+                    t.parent_id, t.tags, t.created_at, t.updated_at, t.close_reason, t.notes, t.workspace_id, t.project_id
              FROM tasks t
              JOIN dependencies d ON t.id = d.child_id
              JOIN tasks blocker ON d.parent_id = blocker.id
@@ -878,7 +944,7 @@ impl Database {
                                AND r.id > c.id AND (r.author IS NULL OR r.author != 'user')){extra}"
         );
         let mut bound: Vec<rusqlite::types::Value> = Vec::new();
-        if let Some((cond, value)) = scope.condition("t.workspace_id", 1) {
+        if let Some((cond, value)) = scope.condition("t.", 1) {
             sql.push_str(&format!(" AND {cond}"));
             bound.extend(value.into_iter().map(rusqlite::types::Value::Integer));
         }
@@ -1073,7 +1139,7 @@ impl Database {
     /// Count tasks grouped by tag (tasks with multiple tags are counted once per tag).
     pub fn task_count_by_tag(&self, scope: &ScopeFilter) -> Result<Vec<(String, i64)>, String> {
         // Pull all non-empty tags columns and split them in Rust
-        let (scope_sql, bound) = match scope.condition("workspace_id", 1) {
+        let (scope_sql, bound) = match scope.condition("", 1) {
             Some((c, v)) => (format!(" AND {c}"), v.into_iter().collect::<Vec<_>>()),
             None => (String::new(), Vec::new()),
         };
@@ -1240,7 +1306,8 @@ impl Database {
     }
 
     /// Task counts per status for every workspace that has tasks, plus one entry with
-    /// `workspace_id: None` for the unscoped bucket when it has tasks. Workspaces with
+    /// `workspace_id: None` for the unscoped bucket when it has tasks (project backlog
+    /// tasks are not unscoped; see [`Database::backlog_task_counts`]). Workspaces with
     /// no tasks are not listed; callers should default them to zero.
     pub fn workspace_task_counts(&self) -> Result<Vec<WorkspaceTaskCounts>, String> {
         let mut stmt = self
@@ -1249,7 +1316,9 @@ impl Database {
                 "SELECT workspace_id,
                         SUM(status = 'open'), SUM(status = 'in_progress'),
                         SUM(status = 'blocked'), SUM(status = 'done')
-                 FROM tasks GROUP BY workspace_id ORDER BY workspace_id",
+                 FROM tasks
+                 WHERE workspace_id IS NOT NULL OR project_id IS NULL
+                 GROUP BY workspace_id ORDER BY workspace_id",
             )
             .map_err(|e| format!("query error: {e}"))?;
         let rows = stmt
@@ -1267,9 +1336,40 @@ impl Database {
             .collect()
     }
 
+    /// Task counts per status for the backlog of every project that has backlog tasks.
+    /// Projects with an empty backlog are not listed; callers should default them to zero.
+    pub fn backlog_task_counts(&self) -> Result<Vec<BacklogTaskCounts>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT project_id,
+                        SUM(status = 'open'), SUM(status = 'in_progress'),
+                        SUM(status = 'blocked'), SUM(status = 'done')
+                 FROM tasks
+                 WHERE workspace_id IS NULL AND project_id IS NOT NULL
+                 GROUP BY project_id ORDER BY project_id",
+            )
+            .map_err(|e| format!("query error: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(BacklogTaskCounts {
+                    project_id: row.get(0)?,
+                    open: row.get(1)?,
+                    in_progress: row.get(2)?,
+                    blocked: row.get(3)?,
+                    done: row.get(4)?,
+                })
+            })
+            .map_err(|e| format!("query error: {e}"))?;
+        rows.map(|r| r.map_err(|e| format!("row error: {e}")))
+            .collect()
+    }
+
     /// Move a task and all of its descendants (via `parent_id`) to `workspace_id`
-    /// (`None` = unscoped bucket) atomically. Tasks whose workspace already equals the
-    /// target are untouched. `updated_at` is bumped on moved tasks that are not `done`
+    /// (`None` = unscoped bucket) atomically. `project_id` follows: it becomes the
+    /// workspace's project, or NULL when the target is unscoped (so a backlog task moved
+    /// to `None` becomes unscoped). Tasks whose placement already equals the target are
+    /// untouched. `updated_at` is bumped on moved tasks that are not `done`
     /// (the board uses `updated_at` of done tasks as their completion time).
     /// Returns the number of tasks moved.
     pub fn set_task_workspace(
@@ -1285,6 +1385,42 @@ impl Database {
         {
             return Err(format!("workspace not found: {ws}"));
         }
+        self.set_subtree_placement(task_id, workspace_id, None)
+    }
+
+    /// Move a task and all of its descendants to the backlog of `project_id`
+    /// (`workspace_id = NULL`, `project_id = P`) atomically. Tasks already in that backlog
+    /// are untouched. `updated_at` is bumped on moved tasks that are not `done`.
+    /// Returns the number of tasks moved. Fails (nothing changed) when the task or the
+    /// project does not exist.
+    pub fn move_task_to_backlog(&self, task_id: &str, project_id: i64) -> Result<usize, String> {
+        if self.get_task(task_id)?.is_none() {
+            return Err(format!("task not found: {task_id}"));
+        }
+        if self.get_project(project_id)?.is_none() {
+            return Err(format!("project not found: {project_id}"));
+        }
+        self.set_subtree_placement(task_id, None, Some(project_id))
+    }
+
+    /// Shared subtree move. Sets `workspace_id = workspace_id` and `project_id` to the
+    /// workspace's project when a workspace is given, else to `backlog_project` (`None`
+    /// = unscoped). Only rows whose `(workspace_id, project_id)` differ are updated.
+    /// Callers validate that the task, workspace and project exist.
+    fn set_subtree_placement(
+        &self,
+        task_id: &str,
+        workspace_id: Option<i64>,
+        backlog_project: Option<i64>,
+    ) -> Result<usize, String> {
+        let project_id = match workspace_id {
+            Some(ws) => Some(
+                self.get_workspace(ws)?
+                    .ok_or_else(|| format!("workspace not found: {ws}"))?
+                    .project_id,
+            ),
+            None => backlog_project,
+        };
 
         self.with_savepoint(|| {
             self.conn
@@ -1294,10 +1430,11 @@ impl Database {
                          UNION
                          SELECT t.id FROM tasks t JOIN subtree s ON t.parent_id = s.id
                      )
-                     UPDATE tasks SET workspace_id = ?2,
-                         updated_at = CASE WHEN status = 'done' THEN updated_at ELSE ?3 END
-                     WHERE id IN (SELECT id FROM subtree) AND workspace_id IS NOT ?2",
-                    params![task_id, workspace_id, Utc::now().to_rfc3339()],
+                     UPDATE tasks SET workspace_id = ?2, project_id = ?3,
+                         updated_at = CASE WHEN status = 'done' THEN updated_at ELSE ?4 END
+                     WHERE id IN (SELECT id FROM subtree)
+                       AND (workspace_id IS NOT ?2 OR project_id IS NOT ?3)",
+                    params![task_id, workspace_id, project_id, Utc::now().to_rfc3339()],
                 )
                 .map_err(|e| format!("failed to move task: {e}"))
         })
@@ -1488,7 +1625,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id
+                "SELECT id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id, project_id
                  FROM tasks WHERE parent_id = ?1 ORDER BY id ASC",
             )
             .map_err(|e| format!("query error: {e}"))?;
@@ -1765,6 +1902,21 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
         )?;
     }
 
+    if version < 7 {
+        // Project backlog: tasks with no workspace but a project. Always set for workspace
+        // tasks too, so a project query is a single column lookup. Existing unscoped
+        // tasks keep NULL.
+        apply_migration(
+            conn,
+            7,
+            "ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id);
+             CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+             UPDATE tasks SET project_id =
+                 (SELECT w.project_id FROM workspaces w WHERE w.id = tasks.workspace_id)
+             WHERE workspace_id IS NOT NULL;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1793,7 +1945,7 @@ fn apply_migration(conn: &Connection, target: i32, sql: &str) -> Result<(), Stri
 /// Build a ` WHERE ...` clause (or empty string) for a scope on `tasks.workspace_id`,
 /// with its bound parameters.
 fn scope_where(scope: &ScopeFilter) -> (String, Vec<i64>) {
-    match scope.condition("workspace_id", 1) {
+    match scope.condition("", 1) {
         Some((c, v)) => (format!(" WHERE {c}"), v.into_iter().collect()),
         None => (String::new(), Vec::new()),
     }
@@ -1914,6 +2066,7 @@ fn row_to_task(row: &rusqlite::Row) -> Task {
         close_reason,
         notes,
         workspace_id: row.get(12).unwrap_or(None),
+        project_id: row.get(13).unwrap_or(None),
     }
 }
 
@@ -1950,6 +2103,7 @@ mod tests {
             close_reason: None,
             notes: None,
             workspace_id: None,
+            project_id: None,
         };
         db.insert_task(&task).expect("insert_task");
         task
@@ -2506,6 +2660,7 @@ mod tests {
             close_reason: None,
             notes: None,
             workspace_id: Some(w1.id),
+            project_id: None,
         };
         db.insert_task(&child).expect("insert child");
         let other = task_in(&db, "other", Some(w1.id));
@@ -3189,5 +3344,552 @@ mod tests {
             1
         );
         assert_eq!(db.get_task(&epic.id).unwrap().unwrap().status, Status::Done);
+    }
+
+    // -- Project backlog (tasks.project_id) --
+
+    /// (workspace_id, project_id) of a task, read back from the database.
+    fn placement(db: &Database, id: &str) -> (Option<i64>, Option<i64>) {
+        let t = db.get_task(id).expect("get").expect("exists");
+        (t.workspace_id, t.project_id)
+    }
+
+    /// Insert a task straight into the backlog of `project`.
+    fn backlog_task(db: &Database, title: &str, project: i64) -> Task {
+        let mut t = make_task(db, title);
+        db.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![t.id])
+            .expect("remove unscoped copy");
+        t.workspace_id = None;
+        t.project_id = None;
+        db.insert_backlog_task(&t, project).expect("backlog insert");
+        t
+    }
+
+    fn list_ids(db: &Database, scope: &ScopeFilter) -> Vec<String> {
+        let tasks = db
+            .list_tasks(true, None, None, None, None, None, None, scope)
+            .expect("list");
+        ids(&tasks)
+    }
+
+    #[test]
+    fn test_migration_from_v6_backfills_project_id() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("v6.db");
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL);
+                 CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     project_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                     name TEXT NOT NULL, created_at TEXT NOT NULL,
+                     archived_at TEXT, restored_at TEXT);
+                 CREATE TABLE tasks (
+                     id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+                     status TEXT NOT NULL DEFAULT 'open', priority INTEGER NOT NULL DEFAULT 2,
+                     assignee TEXT, parent_id TEXT, tags TEXT NOT NULL DEFAULT '',
+                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                     close_reason TEXT, notes TEXT, workspace_id INTEGER);
+                 CREATE TABLE dependencies (child_id TEXT NOT NULL, parent_id TEXT NOT NULL,
+                     PRIMARY KEY (child_id, parent_id));
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
+                     author TEXT, delivered_at TEXT);
+                 INSERT INTO config VALUES ('schema_version', '6');
+                 INSERT INTO projects VALUES (1, '/r/a', 'a', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO projects VALUES (2, '/r/b', 'b', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO workspaces (id, project_id, path, name, created_at)
+                     VALUES (1, 1, '/r/a', 'a', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO workspaces (id, project_id, path, name, created_at)
+                     VALUES (2, 2, '/r/b', 'b', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO tasks (id, title, created_at, updated_at, workspace_id) VALUES
+                     ('tk-a', 'in a', '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00', 1),
+                     ('tk-b', 'in b', '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00', 2),
+                     ('tk-u', 'loose', '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00', NULL);",
+            )
+            .expect("seed v6");
+        }
+
+        let db = Database::open(&path).expect("open migrates");
+        assert_eq!(get_schema_version(&db.conn).unwrap(), LATEST_SCHEMA_VERSION);
+        assert_eq!(placement(&db, "tk-a"), (Some(1), Some(1)));
+        assert_eq!(placement(&db, "tk-b"), (Some(2), Some(2)));
+        assert_eq!(placement(&db, "tk-u"), (None, None));
+        let index_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_project'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("index query");
+        assert_eq!(index_count, 1);
+        assert_eq!(list_ids(&db, &ScopeFilter::Project(1)), vec!["tk-a"]);
+        assert_eq!(list_ids(&db, &ScopeFilter::Unscoped), vec!["tk-u"]);
+        assert!(list_ids(&db, &ScopeFilter::Backlog(1)).is_empty());
+
+        // Re-opening an upgraded database is a no-op.
+        drop(db);
+        let db = Database::open(&path).expect("reopen");
+        assert_eq!(placement(&db, "tk-a"), (Some(1), Some(1)));
+    }
+
+    #[test]
+    fn test_insert_task_syncs_project_id() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, _w2, w3) = setup_scopes(&db);
+
+        // Workspace task: project derived from the workspace, a wrong hint is ignored.
+        let mut t = make_task(&db, "ws task");
+        db.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![t.id])
+            .unwrap();
+        t.workspace_id = Some(w3.id);
+        t.project_id = Some(p1.id);
+        db.insert_task(&t).expect("insert");
+        assert_eq!(placement(&db, &t.id), (Some(w3.id), Some(p2.id)));
+
+        // Unscoped stays unscoped.
+        let loose = make_task(&db, "loose");
+        assert_eq!(placement(&db, &loose.id), (None, None));
+
+        // Direct backlog insert.
+        let b = backlog_task(&db, "parked", p1.id);
+        assert_eq!(placement(&db, &b.id), (None, Some(p1.id)));
+
+        // insert_backlog_task overrides the placement carried by the task.
+        let mut c = make_task(&db, "carrying a workspace");
+        db.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![c.id])
+            .unwrap();
+        c.workspace_id = Some(w1.id);
+        db.insert_backlog_task(&c, p2.id).expect("insert");
+        assert_eq!(placement(&db, &c.id), (None, Some(p2.id)));
+
+        // Unknown project: error and nothing written.
+        let mut d = make_task(&db, "nowhere");
+        db.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![d.id])
+            .unwrap();
+        d.workspace_id = None;
+        let err = db.insert_backlog_task(&d, 999).unwrap_err();
+        assert!(err.contains("project not found"), "{err}");
+        assert!(db.get_task(&d.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_insert_subtask_of_backlog_parent_inherits_project() {
+        let (db, _dir) = open_test_db();
+        let (p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let parent = backlog_task(&db, "epic", p1.id);
+        let ws_parent = task_in(&db, "ws epic", Some(w1.id));
+
+        let sub = |parent_id: &str| {
+            let child_id = db.generate_child_id(parent_id).expect("child id");
+            let now = Utc::now();
+            Task {
+                id: child_id,
+                title: "sub".into(),
+                description: None,
+                status: Status::Open,
+                priority: 2,
+                assignee: None,
+                parent_id: Some(parent_id.to_string()),
+                tags: Vec::new(),
+                created_at: now,
+                updated_at: now,
+                close_reason: None,
+                notes: None,
+                workspace_id: None,
+                project_id: None,
+            }
+        };
+        let child = sub(&parent.id);
+        db.insert_task(&child).expect("insert");
+        assert_eq!(placement(&db, &child.id), (None, Some(p1.id)));
+
+        // A subtask given its parent's workspace (what the commands do) gets the project.
+        let mut ws_child = sub(&ws_parent.id);
+        ws_child.workspace_id = Some(w1.id);
+        db.insert_task(&ws_child).expect("insert");
+        assert_eq!(placement(&db, &ws_child.id), (Some(w1.id), Some(p1.id)));
+    }
+
+    #[test]
+    fn test_set_task_workspace_syncs_project_id() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, w2, w3) = setup_scopes(&db);
+        let t = task_in(&db, "t", Some(w1.id));
+        assert_eq!(placement(&db, &t.id), (Some(w1.id), Some(p1.id)));
+
+        // Same project, other workspace.
+        db.set_task_workspace(&t.id, Some(w2.id)).unwrap();
+        assert_eq!(placement(&db, &t.id), (Some(w2.id), Some(p1.id)));
+
+        // Other project.
+        db.set_task_workspace(&t.id, Some(w3.id)).unwrap();
+        assert_eq!(placement(&db, &t.id), (Some(w3.id), Some(p2.id)));
+
+        // Unscoped clears both.
+        assert_eq!(db.set_task_workspace(&t.id, None).unwrap(), 1);
+        assert_eq!(placement(&db, &t.id), (None, None));
+        assert_eq!(db.set_task_workspace(&t.id, None).unwrap(), 0);
+
+        // A backlog task moved to "none" becomes unscoped; to a workspace, scoped.
+        let b = backlog_task(&db, "b", p1.id);
+        assert_eq!(db.set_task_workspace(&b.id, None).unwrap(), 1);
+        assert_eq!(placement(&db, &b.id), (None, None));
+        let b2 = backlog_task(&db, "b2", p1.id);
+        db.set_task_workspace(&b2.id, Some(w2.id)).unwrap();
+        assert_eq!(placement(&db, &b2.id), (Some(w2.id), Some(p1.id)));
+    }
+
+    #[test]
+    fn test_set_task_workspace_subtree_syncs_project_id() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, _w2, w3) = setup_scopes(&db);
+        let parent = task_in(&db, "parent", Some(w1.id));
+        let child_id = db.generate_child_id(&parent.id).unwrap();
+        let mut child = make_task(&db, "child");
+        db.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![child.id])
+            .unwrap();
+        child.id = child_id;
+        child.parent_id = Some(parent.id.clone());
+        child.workspace_id = Some(w1.id);
+        db.insert_task(&child).unwrap();
+
+        assert_eq!(db.set_task_workspace(&parent.id, Some(w3.id)).unwrap(), 2);
+        assert_eq!(placement(&db, &parent.id), (Some(w3.id), Some(p2.id)));
+        assert_eq!(placement(&db, &child.id), (Some(w3.id), Some(p2.id)));
+
+        assert_eq!(db.set_task_workspace(&parent.id, None).unwrap(), 2);
+        assert_eq!(placement(&db, &child.id), (None, None));
+
+        // Back into p1's backlog, then into a workspace.
+        assert_eq!(db.move_task_to_backlog(&parent.id, p1.id).unwrap(), 2);
+        assert_eq!(placement(&db, &child.id), (None, Some(p1.id)));
+        assert_eq!(db.set_task_workspace(&parent.id, Some(w1.id)).unwrap(), 2);
+        assert_eq!(placement(&db, &child.id), (Some(w1.id), Some(p1.id)));
+    }
+
+    #[test]
+    fn test_reparent_syncs_project_id() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, _w2, w3) = setup_scopes(&db);
+
+        // Reparent under a parent in another project's workspace.
+        let epic = task_in(&db, "epic", Some(w3.id));
+        let t = task_in(&db, "t", Some(w1.id));
+        db.update_task_with_parent(
+            &t.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(&epic.id)),
+        )
+        .unwrap();
+        assert_eq!(placement(&db, &t.id), (Some(w3.id), Some(p2.id)));
+
+        // Reparent under a backlog parent: the task and its subtree join the backlog.
+        let backlog_epic = backlog_task(&db, "backlog epic", p1.id);
+        let loose = task_in(&db, "ws task", Some(w1.id));
+        db.update_task_with_parent(
+            &loose.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(&backlog_epic.id)),
+        )
+        .unwrap();
+        assert_eq!(placement(&db, &loose.id), (None, Some(p1.id)));
+
+        // Reparent under an unscoped parent: both cleared.
+        let unscoped_epic = make_task(&db, "unscoped epic");
+        let b = backlog_task(&db, "b", p1.id);
+        db.update_task_with_parent(
+            &b.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(&unscoped_epic.id)),
+        )
+        .unwrap();
+        assert_eq!(placement(&db, &b.id), (None, None));
+
+        // Promoting (parent none) keeps the current placement.
+        db.update_task_with_parent(
+            &loose.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(None),
+        )
+        .unwrap();
+        assert_eq!(placement(&db, &loose.id), (None, Some(p1.id)));
+    }
+
+    #[test]
+    fn test_move_task_to_backlog() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, _w2, _w3) = setup_scopes(&db);
+
+        let parent = task_in(&db, "parent", Some(w1.id));
+        let mut child_ids = Vec::new();
+        for status in [Status::Open, Status::Done] {
+            let mut c = make_task(&db, "c");
+            db.conn
+                .execute("DELETE FROM tasks WHERE id = ?1", params![c.id])
+                .unwrap();
+            c.id = db.generate_child_id(&parent.id).unwrap();
+            c.parent_id = Some(parent.id.clone());
+            c.workspace_id = Some(w1.id);
+            c.status = status;
+            c.updated_at = DateTime::parse_from_rfc3339("2024-01-01T00:00:00+00:00")
+                .unwrap()
+                .with_timezone(&Utc);
+            db.insert_task(&c).unwrap();
+            child_ids.push(c.id);
+        }
+        let (open_child_id, done_child_id) = (child_ids[0].clone(), child_ids[1].clone());
+        let before_open = db.get_task(&open_child_id).unwrap().unwrap().updated_at;
+        let before_done = db.get_task(&done_child_id).unwrap().unwrap().updated_at;
+
+        assert_eq!(db.move_task_to_backlog(&parent.id, p1.id).unwrap(), 3);
+        for id in [&parent.id, &open_child_id, &done_child_id] {
+            assert_eq!(placement(&db, id), (None, Some(p1.id)));
+        }
+        // updated_at is bumped on non-done tasks only.
+        assert!(db.get_task(&open_child_id).unwrap().unwrap().updated_at > before_open);
+        assert_eq!(
+            db.get_task(&done_child_id).unwrap().unwrap().updated_at,
+            before_done
+        );
+
+        // Idempotent.
+        assert_eq!(db.move_task_to_backlog(&parent.id, p1.id).unwrap(), 0);
+
+        // Moving between project backlogs works.
+        assert_eq!(db.move_task_to_backlog(&parent.id, p2.id).unwrap(), 3);
+        assert_eq!(placement(&db, &open_child_id), (None, Some(p2.id)));
+
+        // Unknown task or project: error, nothing changed.
+        assert!(db.move_task_to_backlog("tk-nope", p1.id).is_err());
+        let err = db.move_task_to_backlog(&parent.id, 999).unwrap_err();
+        assert!(err.contains("project not found"), "{err}");
+        assert_eq!(placement(&db, &parent.id), (None, Some(p2.id)));
+    }
+
+    #[test]
+    fn test_scope_filters_with_backlog() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, w2, w3) = setup_scopes(&db);
+        let a = task_in(&db, "w1", Some(w1.id));
+        let b = task_in(&db, "w2", Some(w2.id));
+        let c = task_in(&db, "w3", Some(w3.id));
+        let bl1 = backlog_task(&db, "backlog p1", p1.id);
+        let bl2 = backlog_task(&db, "backlog p2", p2.id);
+        let loose = make_task(&db, "loose");
+
+        let all = sorted(vec![
+            a.id.clone(),
+            b.id.clone(),
+            c.id.clone(),
+            bl1.id.clone(),
+            bl2.id.clone(),
+            loose.id.clone(),
+        ]);
+        assert_eq!(list_ids(&db, &ScopeFilter::All), all);
+        assert_eq!(list_ids(&db, &ScopeFilter::AllVisible), all);
+
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::Backlog(p1.id)),
+            vec![bl1.id.clone()]
+        );
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::Backlog(p2.id)),
+            vec![bl2.id.clone()]
+        );
+        assert!(list_ids(&db, &ScopeFilter::Backlog(999)).is_empty());
+
+        let p1_expected = sorted(vec![a.id.clone(), b.id.clone(), bl1.id.clone()]);
+        assert_eq!(list_ids(&db, &ScopeFilter::Project(p1.id)), p1_expected);
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::ProjectVisible(p1.id)),
+            p1_expected
+        );
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::Project(p2.id)),
+            sorted(vec![c.id.clone(), bl2.id.clone()])
+        );
+
+        // Unscoped excludes the backlog; Workspace never matches backlog tasks.
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::Unscoped),
+            vec![loose.id.clone()]
+        );
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::Workspace(w1.id)),
+            vec![a.id.clone()]
+        );
+
+        // Archiving w2: ProjectVisible skips its tasks but keeps the backlog; AllVisible
+        // keeps backlog and unscoped tasks.
+        db.archive_workspace(w2.id).unwrap();
+        assert_eq!(
+            list_ids(&db, &ScopeFilter::ProjectVisible(p1.id)),
+            sorted(vec![a.id.clone(), bl1.id.clone()])
+        );
+        assert_eq!(list_ids(&db, &ScopeFilter::Project(p1.id)), p1_expected);
+        let visible = list_ids(&db, &ScopeFilter::AllVisible);
+        assert!(!visible.contains(&b.id));
+        for id in [&a.id, &c.id, &bl1.id, &bl2.id, &loose.id] {
+            assert!(visible.contains(id), "{id} should stay visible");
+        }
+    }
+
+    #[test]
+    fn test_backlog_scope_in_ready_blocked_stats_and_comments() {
+        let (db, _dir) = open_test_db();
+        let (p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let ws_task = task_in(&db, "ws", Some(w1.id));
+        let blocker = backlog_task(&db, "blocker", p1.id);
+        let blocked = backlog_task(&db, "blocked", p1.id);
+        let loose = make_task(&db, "loose");
+        db.add_dependency(&blocked.id, &blocker.id).unwrap();
+        db.update_tags(&blocker.id, &["bk".to_string()]).unwrap();
+        db.add_comment_by(&blocker.id, "question", Some("user"))
+            .unwrap();
+        db.add_comment_by(&loose.id, "question", Some("user"))
+            .unwrap();
+
+        // The alias form ("t.") works in the joined queries.
+        let ready = |scope: &ScopeFilter| ids(&db.get_ready_tasks(None, scope).unwrap());
+        assert_eq!(
+            ready(&ScopeFilter::Backlog(p1.id)),
+            vec![blocker.id.clone()]
+        );
+        assert_eq!(
+            ready(&ScopeFilter::Project(p1.id)),
+            sorted(vec![ws_task.id.clone(), blocker.id.clone()])
+        );
+        assert_eq!(ready(&ScopeFilter::Unscoped), vec![loose.id.clone()]);
+        assert_eq!(
+            ids(&db.get_blocked_tasks(&ScopeFilter::Backlog(p1.id)).unwrap()),
+            vec![blocked.id.clone()]
+        );
+        assert!(
+            db.get_blocked_tasks(&ScopeFilter::Unscoped)
+                .unwrap()
+                .is_empty()
+        );
+
+        let pending = db
+            .pending_user_comments(&ScopeFilter::Backlog(p1.id))
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].task_id, blocker.id);
+        assert_eq!(
+            db.pending_user_comments(&ScopeFilter::Unscoped)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Counting queries use the unaliased form.
+        let total = |scope: &ScopeFilter| -> i64 {
+            db.task_count_by_status(scope)
+                .unwrap()
+                .iter()
+                .map(|(_, n)| n)
+                .sum()
+        };
+        assert_eq!(total(&ScopeFilter::Backlog(p1.id)), 2);
+        assert_eq!(total(&ScopeFilter::Project(p1.id)), 3);
+        assert_eq!(total(&ScopeFilter::Unscoped), 1);
+        assert_eq!(
+            db.task_count_by_priority(&ScopeFilter::Backlog(p1.id))
+                .unwrap(),
+            vec![(2, 2)]
+        );
+        assert_eq!(
+            db.task_count_by_tag(&ScopeFilter::Backlog(p1.id)).unwrap(),
+            vec![("bk".to_string(), 1)]
+        );
+        assert!(
+            db.task_count_by_tag(&ScopeFilter::Unscoped)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_workspace_counts_do_not_count_backlog_as_unscoped() {
+        let (db, _dir) = open_test_db();
+        let (p1, p2, w1, _w2, _w3) = setup_scopes(&db);
+        task_in(&db, "ws", Some(w1.id));
+        let _loose = make_task(&db, "loose");
+        backlog_task(&db, "b1", p1.id);
+        let done = backlog_task(&db, "b2", p1.id);
+        set_status(&db, &done.id, "done");
+        backlog_task(&db, "b3", p2.id);
+
+        let counts = db.workspace_task_counts().unwrap();
+        let unscoped = counts
+            .iter()
+            .find(|c| c.workspace_id.is_none())
+            .expect("unscoped");
+        assert_eq!(unscoped.total(), 1);
+        let ws = counts
+            .iter()
+            .find(|c| c.workspace_id == Some(w1.id))
+            .expect("w1");
+        assert_eq!(ws.total(), 1);
+
+        let backlog = db.backlog_task_counts().unwrap();
+        assert_eq!(backlog.len(), 2);
+        assert_eq!(
+            backlog[0],
+            BacklogTaskCounts {
+                project_id: p1.id,
+                open: 1,
+                in_progress: 0,
+                blocked: 0,
+                done: 1
+            }
+        );
+        assert_eq!(backlog[1].project_id, p2.id);
+        assert_eq!(backlog[1].total(), 1);
+    }
+
+    #[test]
+    fn test_backlog_tasks_do_not_block_workspace_auto_archive() {
+        let (db, _dir) = open_test_db();
+        let (p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        backlog_task(&db, "parked", p1.id);
+        // w1 has no tasks of its own: it is archived even though the project has an open
+        // backlog task, and the backlog task is untouched.
+        let archived = db.auto_archive_removed_workspaces(|_| true).unwrap();
+        assert!(archived.contains(&w1.id));
+        assert_eq!(list_ids(&db, &ScopeFilter::Backlog(p1.id)).len(), 1);
     }
 }

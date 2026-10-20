@@ -114,6 +114,7 @@ mod tests {
             close_reason: None,
             notes: None,
             workspace_id: None,
+            project_id: None,
         }
     }
 

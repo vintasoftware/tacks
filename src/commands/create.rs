@@ -59,6 +59,7 @@ pub fn run(
         close_reason: None,
         notes: None,
         workspace_id,
+        project_id: None,
     };
 
     db.insert_task(&task)?;

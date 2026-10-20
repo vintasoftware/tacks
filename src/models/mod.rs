@@ -74,6 +74,9 @@ pub struct Task {
     pub notes: Option<String>,
     /// Workspace this task belongs to; `None` means the unscoped bucket.
     pub workspace_id: Option<i64>,
+    /// Project this task belongs to. Set for workspace tasks (the workspace's project) and
+    /// for project backlog tasks (`workspace_id` is `None`); `None` means unscoped.
+    pub project_id: Option<i64>,
 }
 
 /// A project: a git repository grouping one or more workspaces (worktrees).

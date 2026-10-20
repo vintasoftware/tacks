@@ -240,6 +240,7 @@ pub async fn api_create_task(
             close_reason: None,
             notes: None,
             workspace_id,
+            project_id: None,
         };
 
         db.insert_task(&task).map_err(AppError::Internal)?;
@@ -1750,6 +1751,7 @@ pub async fn task_create_form(
             close_reason: None,
             notes: None,
             workspace_id,
+            project_id: None,
         };
         db.insert_task(&task).map_err(AppError::Internal)
     })
