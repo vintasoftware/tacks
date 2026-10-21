@@ -78,6 +78,16 @@ async fn i_have_a_subtask_of(
 // When steps
 // ---------------------------------------------------------------------------
 
+#[when(expr = "I create a subtask of {string} called {string} with title {string}")]
+async fn i_create_a_subtask_of(
+    world: &mut TacksWorld,
+    parent_alias: String,
+    alias: String,
+    title: String,
+) {
+    create_subtask_with_alias(world, &parent_alias, &alias, &title);
+}
+
 #[when(expr = "I reparent {string} under {string}")]
 async fn i_reparent_under(world: &mut TacksWorld, task_alias: String, parent_alias: String) {
     let task_id = world
@@ -201,4 +211,25 @@ async fn the_task_id_matches_stored(world: &mut TacksWorld) {
         "expected task ID '{}' but got '{}' — task ID changed during reparent",
         stored_id, actual
     );
+}
+
+#[then(expr = "the ID of {string} is the ID of {string} followed by {string}")]
+async fn the_id_is_parent_id_followed_by(
+    world: &mut TacksWorld,
+    alias: String,
+    base_alias: String,
+    suffix: String,
+) {
+    let id = world
+        .task_ids
+        .get(&alias)
+        .unwrap_or_else(|| panic!("no task with alias '{alias}'"))
+        .clone();
+    let base = world
+        .task_ids
+        .get(&base_alias)
+        .unwrap_or_else(|| panic!("no task with alias '{base_alias}'"))
+        .clone();
+    let expected = format!("{base}{suffix}");
+    assert_eq!(id, expected, "expected ID '{expected}' but got '{id}'");
 }

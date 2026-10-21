@@ -62,3 +62,41 @@ Feature: Task reparenting
     When I reparent "sub" under "epic2"
     And I show task "sub" in JSON
     Then the JSON field "parent_id" equals the ID of "epic2"
+
+  Scenario: New subtask gets the next free ID after a sibling is reparented to another task
+    Given I have a task called "parent" with title "Parent"
+    And I have a task called "other" with title "Other"
+    And I have a subtask of "parent" called "c1" with title "First child"
+    And I have a subtask of "parent" called "c2" with title "Second child"
+    When I reparent "c1" under "other"
+    And I create a subtask of "parent" called "c3" with title "Third child"
+    Then the ID of "c3" is the ID of "parent" followed by ".3"
+
+  Scenario: Reparented subtask keeps its ID under the new parent after the old parent gets a new subtask
+    Given I have a task called "parent" with title "Parent"
+    And I have a task called "other" with title "Other"
+    And I have a subtask of "parent" called "c1" with title "First child"
+    And I have a subtask of "parent" called "c2" with title "Second child"
+    When I reparent "c1" under "other"
+    And I create a subtask of "parent" called "c3" with title "Third child"
+    And I show task "c1" in JSON
+    Then the JSON field "parent_id" equals the ID of "other"
+    And the ID of "c1" is the ID of "parent" followed by ".1"
+
+  Scenario: New subtask gets the next free ID after a sibling is promoted to top-level
+    Given I have a task called "parent" with title "Parent"
+    And I have a subtask of "parent" called "c1" with title "First child"
+    And I have a subtask of "parent" called "c2" with title "Second child"
+    When I reparent "c1" under "none"
+    And I create a subtask of "parent" called "c3" with title "Third child"
+    Then the ID of "c3" is the ID of "parent" followed by ".3"
+
+  Scenario: Promoted subtask keeps its ID as a top-level task after the old parent gets a new subtask
+    Given I have a task called "parent" with title "Parent"
+    And I have a subtask of "parent" called "c1" with title "First child"
+    And I have a subtask of "parent" called "c2" with title "Second child"
+    When I reparent "c1" under "none"
+    And I create a subtask of "parent" called "c3" with title "Third child"
+    And I show task "c1" in JSON
+    Then the JSON field "parent_id" is null
+    And the ID of "c1" is the ID of "parent" followed by ".1"

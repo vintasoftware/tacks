@@ -11,6 +11,12 @@ use crate::models::{
 /// Latest schema version known to this build.
 const LATEST_SCHEMA_VERSION: i32 = 7;
 
+/// Hash lengths (hex chars) tried by `generate_id`, shortest first.
+const ID_HASH_LENGTHS: [usize; 3] = [4, 5, 6];
+
+/// Random candidates tried at each hash length before widening.
+const ID_ATTEMPTS_PER_LENGTH: usize = 3;
+
 /// Which tasks a list-type query should cover.
 ///
 /// A task is in a workspace (`workspace_id` set, `project_id` set), in a project
@@ -1588,27 +1594,104 @@ impl Database {
         }
     }
 
-    /// Generate a short hash-based ID with the configured prefix.
+    /// Generate a short hash-based ID with the configured prefix that is not
+    /// already used by a task.
+    ///
+    /// Tries a few random 4-char hashes first (the stable `tk-XXXX` format),
+    /// then widens to 5 and 6 chars when candidates collide. Errors only if
+    /// every candidate is taken.
     pub fn generate_id(&self) -> Result<String, String> {
+        self.generate_id_with(|len| {
+            let hex = uuid::Uuid::new_v4().simple().to_string();
+            hex[..len].to_string()
+        })
+    }
+
+    /// Core of [`Database::generate_id`] with an injectable hash source.
+    ///
+    /// `next_hash(len)` must return a hex string of `len` chars. Candidates are
+    /// tried at each length in `ID_HASH_LENGTHS` (`ID_ATTEMPTS_PER_LENGTH`
+    /// attempts each) and the first one not present in `tasks` wins.
+    fn generate_id_with(
+        &self,
+        mut next_hash: impl FnMut(usize) -> String,
+    ) -> Result<String, String> {
         let prefix = self
             .get_config("prefix")?
             .unwrap_or_else(|| "tk".to_string());
-        let uuid = uuid::Uuid::new_v4();
-        let hash = &format!("{:x}", uuid.as_u128())[..4];
-        Ok(format!("{prefix}-{hash}"))
+        for len in ID_HASH_LENGTHS {
+            for _ in 0..ID_ATTEMPTS_PER_LENGTH {
+                let candidate = format!("{prefix}-{}", next_hash(len));
+                let taken: bool = self
+                    .conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+                        params![candidate],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("query error: {e}"))?;
+                if !taken {
+                    return Ok(candidate);
+                }
+            }
+        }
+        Err("failed to generate a unique task id".to_string())
     }
 
-    /// Generate a child ID under a parent.
+    /// Generate a child ID (`<parent_id>.<N>`) that is not used by any task.
+    ///
+    /// `N` is one more than the highest numeric suffix among all existing task
+    /// IDs of the exact form `<parent_id>.<digits>`, regardless of their current
+    /// `parent_id`. Counting current children is not enough: a child that was
+    /// reparented away keeps its ID, so the count can drop and collide with an
+    /// existing ID. Deeper IDs (`<parent_id>.1.3`) and non-numeric suffixes
+    /// (`<parent_id>.x`) are ignored. The first child is `.1`. As a safety net
+    /// the candidate is checked against `tasks` and incremented until free.
     pub fn generate_child_id(&self, parent_id: &str) -> Result<String, String> {
-        // Count existing children to determine next index
+        let prefix = format!("{parent_id}.");
+        // substr() counts characters, not bytes, for TEXT values.
+        let prefix_len = prefix.chars().count() as i64;
+
         let mut stmt = self
             .conn
-            .prepare("SELECT COUNT(*) FROM tasks WHERE parent_id = ?1")
+            .prepare("SELECT id FROM tasks WHERE substr(id, 1, ?1) = ?2")
             .map_err(|e| format!("query error: {e}"))?;
-        let count: i64 = stmt
-            .query_row(params![parent_id], |row| row.get(0))
+        let ids = stmt
+            .query_map(params![prefix_len, prefix], |row| row.get::<_, String>(0))
             .map_err(|e| format!("query error: {e}"))?;
-        Ok(format!("{parent_id}.{}", count + 1))
+
+        let mut highest: u64 = 0;
+        for id in ids {
+            let id = id.map_err(|e| format!("query error: {e}"))?;
+            let suffix = id.strip_prefix(prefix.as_str()).unwrap_or_default();
+            if !suffix.is_empty()
+                && suffix.bytes().all(|b| b.is_ascii_digit())
+                && let Ok(n) = suffix.parse::<u64>()
+            {
+                highest = highest.max(n);
+            }
+        }
+
+        let mut next = highest
+            .checked_add(1)
+            .ok_or_else(|| "failed to generate a unique child id".to_string())?;
+        loop {
+            let candidate = format!("{prefix}{next}");
+            let taken: bool = self
+                .conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+                    params![candidate],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("query error: {e}"))?;
+            if !taken {
+                return Ok(candidate);
+            }
+            next = next
+                .checked_add(1)
+                .ok_or_else(|| "failed to generate a unique child id".to_string())?;
+        }
     }
 
     /// Return the current SQLite `PRAGMA data_version` value.
@@ -2107,6 +2190,75 @@ mod tests {
         };
         db.insert_task(&task).expect("insert_task");
         task
+    }
+
+    #[test]
+    fn test_generate_id_retries_on_collision() {
+        let (db, _dir) = open_test_db();
+        let existing = make_task(&db, "existing");
+        let taken_hash = existing.id.strip_prefix("tk-").expect("prefix").to_string();
+        assert_eq!(taken_hash.len(), 4);
+
+        let mut calls = 0;
+        let id = db
+            .generate_id_with(|len| {
+                calls += 1;
+                if calls == 1 {
+                    taken_hash.clone()
+                } else {
+                    "beef".repeat(2)[..len].to_string()
+                }
+            })
+            .expect("generate_id_with");
+        assert_eq!(calls, 2, "second candidate should be used");
+        assert_ne!(id, existing.id);
+        assert_eq!(id, "tk-beef");
+    }
+
+    #[test]
+    fn test_generate_id_widens_to_five_chars_when_four_char_ids_collide() {
+        let (db, _dir) = open_test_db();
+        let existing = make_task(&db, "existing");
+        let taken_hash = existing.id.strip_prefix("tk-").expect("prefix").to_string();
+
+        let id = db
+            .generate_id_with(|len| {
+                if len == 4 {
+                    taken_hash.clone()
+                } else {
+                    "abcdef"[..len].to_string()
+                }
+            })
+            .expect("generate_id_with");
+        assert_eq!(id, "tk-abcde");
+    }
+
+    #[test]
+    fn test_generate_id_errors_when_all_candidates_collide() {
+        let (db, _dir) = open_test_db();
+        for hash in ["aaaa", "aaaaa", "aaaaaa"] {
+            let mut task = make_task(&db, "t");
+            db.conn
+                .execute(
+                    "UPDATE tasks SET id = ?1 WHERE id = ?2",
+                    params![format!("tk-{hash}"), task.id],
+                )
+                .expect("rename");
+            task.id = format!("tk-{hash}");
+        }
+        let err = db
+            .generate_id_with(|len| "aaaaaa"[..len].to_string())
+            .expect_err("all candidates taken");
+        assert_eq!(err, "failed to generate a unique task id");
+    }
+
+    #[test]
+    fn test_generate_id_returns_prefixed_hex_id() {
+        let (db, _dir) = open_test_db();
+        let id = db.generate_id().expect("generate_id");
+        let hash = id.strip_prefix("tk-").expect("prefix");
+        assert_eq!(hash.len(), 4);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -3891,5 +4043,135 @@ mod tests {
         let archived = db.auto_archive_removed_workspaces(|_| true).unwrap();
         assert!(archived.contains(&w1.id));
         assert_eq!(list_ids(&db, &ScopeFilter::Backlog(p1.id)).len(), 1);
+    }
+
+    /// Insert a task with an explicit ID (and optional parent) for ID-generation tests.
+    fn insert_with_id(db: &Database, id: &str, parent_id: Option<&str>) {
+        let mut t = make_task(db, "explicit");
+        db.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![t.id])
+            .unwrap();
+        t.id = id.to_string();
+        t.parent_id = parent_id.map(str::to_string);
+        db.insert_task(&t).expect("insert_task");
+    }
+
+    /// Create a child under `parent_id` using `generate_child_id`.
+    fn add_child(db: &Database, parent_id: &str) -> String {
+        let id = db.generate_child_id(parent_id).expect("child id");
+        insert_with_id(db, &id, Some(parent_id));
+        id
+    }
+
+    fn reparent(db: &Database, id: &str, new_parent: Option<&str>) {
+        db.update_task_with_parent(
+            id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(new_parent),
+        )
+        .expect("reparent");
+    }
+
+    #[test]
+    fn test_generate_child_id_sequential_for_normal_case() {
+        let (db, _dir) = open_test_db();
+        let parent = make_task(&db, "parent");
+        assert_eq!(
+            db.generate_child_id(&parent.id).unwrap(),
+            format!("{}.1", parent.id)
+        );
+        assert_eq!(add_child(&db, &parent.id), format!("{}.1", parent.id));
+        assert_eq!(add_child(&db, &parent.id), format!("{}.2", parent.id));
+        assert_eq!(add_child(&db, &parent.id), format!("{}.3", parent.id));
+    }
+
+    #[test]
+    fn test_generate_child_id_after_child_reparented_away_does_not_collide() {
+        let (db, _dir) = open_test_db();
+        let parent = make_task(&db, "parent");
+        let other = make_task(&db, "other");
+        let c1 = add_child(&db, &parent.id);
+        let c2 = add_child(&db, &parent.id);
+        assert_eq!(c1, format!("{}.1", parent.id));
+        assert_eq!(c2, format!("{}.2", parent.id));
+
+        // Reparenting keeps the ID, so `.1` still exists under `other`.
+        reparent(&db, &c1, Some(&other.id));
+        assert_eq!(
+            db.get_task(&c1).unwrap().unwrap().parent_id,
+            Some(other.id.clone())
+        );
+        assert_eq!(
+            db.generate_child_id(&parent.id).unwrap(),
+            format!("{}.3", parent.id)
+        );
+
+        // Promoting to top-level behaves the same way.
+        reparent(&db, &c2, None);
+        assert_eq!(add_child(&db, &parent.id), format!("{}.3", parent.id));
+        assert_eq!(add_child(&db, &parent.id), format!("{}.4", parent.id));
+    }
+
+    #[test]
+    fn test_generate_child_id_ignores_nested_and_non_numeric_suffixes() {
+        let (db, _dir) = open_test_db();
+        let parent = make_task(&db, "parent");
+        let p = parent.id.clone();
+        let first = add_child(&db, &p);
+        assert_eq!(first, format!("{p}.1"));
+
+        // Grandchild-style, non-numeric and empty suffixes must not move the counter.
+        insert_with_id(&db, &format!("{p}.1.5"), Some(&first));
+        insert_with_id(&db, &format!("{p}.x"), None);
+        insert_with_id(&db, &format!("{p}.2x"), None);
+        insert_with_id(&db, &format!("{p}."), None);
+        assert_eq!(db.generate_child_id(&p).unwrap(), format!("{p}.2"));
+
+        // A direct suffix with several digits does count (numeric, not lexical, max).
+        insert_with_id(&db, &format!("{p}.12"), None);
+        insert_with_id(&db, &format!("{p}.9"), None);
+        assert_eq!(db.generate_child_id(&p).unwrap(), format!("{p}.13"));
+    }
+
+    #[test]
+    fn test_generate_child_id_ignores_foreign_ids_reparented_into_parent() {
+        let (db, _dir) = open_test_db();
+        let parent = make_task(&db, "parent");
+        let foreign = make_task(&db, "foreign");
+        let c1 = add_child(&db, &parent.id);
+        assert_eq!(c1, format!("{}.1", parent.id));
+
+        reparent(&db, &foreign.id, Some(&parent.id));
+        // Two children now, but the foreign ID has no `parent.N` suffix: no skip.
+        assert_eq!(db.get_children(&parent.id).unwrap().len(), 2);
+        assert_eq!(
+            db.generate_child_id(&parent.id).unwrap(),
+            format!("{}.2", parent.id)
+        );
+        assert_eq!(add_child(&db, &parent.id), format!("{}.2", parent.id));
+
+        // A child of another parent moved in keeps its own ID and does not collide either.
+        let other = make_task(&db, "other");
+        let moved = add_child(&db, &other.id);
+        reparent(&db, &moved, Some(&parent.id));
+        assert_eq!(add_child(&db, &parent.id), format!("{}.3", parent.id));
+        assert_eq!(add_child(&db, &other.id), format!("{}.2", other.id));
+    }
+
+    #[test]
+    fn test_generate_child_id_prefix_match_is_literal_not_like_wildcards() {
+        let (db, _dir) = open_test_db();
+        // `_` and `%` are LIKE wildcards; they must be matched literally.
+        let parent = "tk-a_b%";
+        insert_with_id(&db, parent, None);
+        insert_with_id(&db, "tk-aXbYY.7", None);
+        insert_with_id(&db, "tk-a_b%.2", Some(parent));
+        assert_eq!(db.generate_child_id(parent).unwrap(), "tk-a_b%.3");
     }
 }
