@@ -83,7 +83,7 @@ Check for newly unblocked work (closing a task may have unblocked its dependents
 
 **File discoveries, don't silently skip them.** When you notice something broken, missing, or worth doing, file a task. Write the description for the human reviewer, who reads it in the web UI without your context: **Context** (why, what you found), **Approach** (plan, rejected alternatives), **Done when** (`- [ ]` checklist), **Open questions**. Keep it current with `tk update <id> -d` as you learn things; notes are only for short-lived working state. Use `tk dep add` to wire it into the dependency graph so it surfaces at the right time.
 
-**If blocked, say so explicitly.** If you cannot make progress on a task because of a missing prerequisite, external dependency, or need for human input:
+**If blocked, say so explicitly.** If you cannot make progress on a task because of a missing prerequisite, external dependency, or need for human input (use `--status blocked` only when human input is needed, not for waiting on another task; use `tk dep add` for that):
 
 1. Set the status: `tk update <id> --status blocked`
 2. Put a `## Blocked` section at the top of the description, keeping the existing description below it. `-d` replaces the whole description, so read the current text with `tk show <id> --json` (field `description`) and pass the full new text:

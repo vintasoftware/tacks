@@ -876,6 +876,44 @@ impl Database {
         Ok(tasks)
     }
 
+    /// Open blockers of every not-done task, as `child_id -> [(blocker_id, blocker_title)]`.
+    ///
+    /// A blocker is open while its status is not `done`. Tasks without open blockers
+    /// are absent from the map. Blockers are ordered by creation time, then ID. Read-only
+    /// and unscoped: callers pick the task IDs they need (one query instead of one per task).
+    pub fn open_blockers_by_task(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT d.child_id, blocker.id, blocker.title
+                 FROM dependencies d
+                 JOIN tasks child ON child.id = d.child_id
+                 JOIN tasks blocker ON blocker.id = d.parent_id
+                 WHERE child.status != 'done' AND blocker.status != 'done'
+                 ORDER BY blocker.created_at ASC, blocker.id ASC",
+            )
+            .map_err(|e| format!("query error: {e}"))?;
+        let rows = stmt
+            .query_map(params![], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("query error: {e}"))?;
+
+        let mut map: std::collections::HashMap<String, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (child_id, blocker_id, title) = row.map_err(|e| format!("row error: {e}"))?;
+            map.entry(child_id).or_default().push((blocker_id, title));
+        }
+        Ok(map)
+    }
+
     // -- Comments --
 
     /// Add a comment with no recorded author (legacy behaviour; treated as agent-authored).
@@ -2259,6 +2297,33 @@ mod tests {
         let hash = id.strip_prefix("tk-").expect("prefix");
         assert_eq!(hash.len(), 4);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_open_blockers_by_task_lists_only_open_blockers_of_open_tasks() {
+        let (db, _dir) = open_test_db();
+        let child = make_task(&db, "child");
+        let open_blocker = make_task(&db, "open blocker");
+        let done_blocker = make_task(&db, "done blocker");
+        let free = make_task(&db, "free");
+        db.add_dependency(&child.id, &open_blocker.id).expect("dep");
+        db.add_dependency(&child.id, &done_blocker.id).expect("dep");
+        db.close_task(&done_blocker.id, None).expect("close");
+
+        let map = db.open_blockers_by_task().expect("open blockers");
+        assert_eq!(
+            map.get(&child.id),
+            Some(&vec![(open_blocker.id.clone(), "open blocker".to_string())])
+        );
+        assert!(!map.contains_key(&free.id));
+
+        // Once the child is done it no longer appears.
+        db.close_task(&child.id, None).expect("close child");
+        assert!(
+            !db.open_blockers_by_task()
+                .expect("open blockers")
+                .contains_key(&child.id)
+        );
     }
 
     #[test]

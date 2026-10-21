@@ -90,7 +90,7 @@ Keep the description current: when you learn something that changes the plan or 
 
 ### When you are blocked
 
-This is the most important case. The user cannot help unless the task tells them what you need.
+This is the most important case. The user cannot help unless the task tells them what you need. Use `-s blocked` only when human input is needed, not for waiting on another task (use `tk dep add` for that).
 
 1. `tk update <id> -s blocked`
 2. Add a `## Blocked` section at the top of the description (full text, see above) with: what blocks you (be specific: error, missing access, unclear requirement), what you already tried, the decision you need from the user, the options with their trade-offs, and your recommendation.

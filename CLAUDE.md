@@ -46,7 +46,7 @@ tests/
     workspace_scoping.feature web_workspaces.feature
     web_workspace_actions.feature
     workspace_guard.feature   agent_hook.feature
-    workspace_auto_archive.feature
+    workspace_auto_archive.feature board_blocked_column.feature
     project_backlog.feature   web_backlog.feature
     (plus web/API features: serve, web_api, web_views, web_security, user_feedback, ...)
   bdd/
@@ -80,7 +80,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (668 scenarios, 7321 steps)
+cargo test --test bdd    # Run BDD scenarios (691 scenarios, 7543 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```

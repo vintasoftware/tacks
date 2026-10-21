@@ -217,7 +217,7 @@ Feature: Workspace actions and pass-2 views in the web UI
     When I GET resolved "/p/@project(A)/w/@workspace(A)/board"
     Then the response status is 200
     And the response body contains resolved "@id(a1)"
-    And the response body contains "blocked by 1"
+    And the response body contains resolved "blocked by @id(a2)"
 
   Scenario: the task list has a Workspace column in All scope
     When I GET resolved "/tasks"

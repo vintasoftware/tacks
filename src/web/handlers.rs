@@ -1181,6 +1181,8 @@ struct TaskRow {
     blocked_count: usize,
     /// Open blockers as `id: title` strings (tooltip text).
     blockers: Vec<String>,
+    /// IDs of the open blockers (board "blocked by" marker); filled by `with_open_blockers`.
+    blocker_ids: Vec<String>,
     /// Relative last-update time ("2h ago").
     updated_rel: String,
     /// Absolute last-update time (tooltip).
@@ -1221,12 +1223,32 @@ impl TaskRow {
             children_total,
             blocked_count,
             blockers,
+            blocker_ids: Vec::new(),
             updated_rel,
             updated_abs,
             workspace: None,
             backlog: None,
             pending_count: 0,
         }
+    }
+
+    /// Attach the open blockers of this task from a batch map (`open_blockers_by_task`),
+    /// replacing any blocker data set by `from_task`.
+    fn with_open_blockers(
+        mut self,
+        map: &std::collections::HashMap<String, Vec<(String, String)>>,
+    ) -> Self {
+        let open = map
+            .get(&self.task.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        self.blocker_ids = open.iter().map(|(id, _)| id.clone()).collect();
+        self.blockers = open
+            .iter()
+            .map(|(id, title)| format!("{id}: {title}"))
+            .collect();
+        self.blocked_count = open.len();
+        self
     }
 
     /// Attach the pending user-comment count from a per-task count map.
@@ -2202,25 +2224,20 @@ pub async fn board(
             )
         };
 
-        // Fetch the set of task IDs that have at least one open blocker (via dep graph).
-        // These tasks belong in the Blocked column regardless of their `status` field,
-        // because `dep add` does not automatically change a task's status to "blocked".
-        let dep_blocked_ids: std::collections::HashSet<String> = db
-            .get_blocked_tasks(&scope_filter)?
-            .into_iter()
-            .map(|t| t.id)
-            .collect();
+        // Open blockers per task (one query). The Blocked column holds only tasks whose
+        // status is `blocked` (a human decision is needed); open tasks that merely wait on
+        // a dependency stay in Open, after the ready ones, with a "blocked by" marker.
+        let open_blockers = db.open_blockers_by_task()?;
 
-        // Fetch open tasks, then split: those with open blockers go to the blocked column.
-        let open_raw = fetch("open", false)?;
-        let (dep_blocked_open, open_raw_filtered): (Vec<Task>, Vec<Task>) = open_raw
+        // Stable partition keeps the existing order inside each group.
+        let (open_ready, open_waiting): (Vec<Task>, Vec<Task>) = fetch("open", false)?
             .into_iter()
-            .partition(|t| dep_blocked_ids.contains(&t.id));
+            .partition(|t| !open_blockers.contains_key(&t.id));
+        let mut open_raw_filtered = open_ready;
+        open_raw_filtered.extend(open_waiting);
 
         let in_progress_raw = fetch("in_progress", false)?;
-        // Combine status=blocked tasks with open tasks that have active dep blockers.
-        let mut blocked_raw = fetch("blocked", false)?;
-        blocked_raw.extend(dep_blocked_open);
+        let blocked_raw = fetch("blocked", false)?;
         let done_raw = fetch("done", true)?;
 
         // Compute the done_since cutoff for filtering completed tasks.
@@ -2259,23 +2276,17 @@ pub async fn board(
             all_tasks_iter.filter_map(|t| t.parent_id.clone()).collect();
         let parents = fetch_parent_map(&db, parent_ids.into_iter())?;
 
-        // Board cards don't show child counts — pass empty map so from_task defaults to (0, 0)
+        // Board cards don't show child counts or blockers via from_task: pass empty maps
+        // (child counts default to (0, 0)); blockers come from `with_open_blockers`.
         let empty_child_counts = std::collections::HashMap::new();
-        // Batch-fetch blocker counts for all tasks across all columns
-        let all_board_ids: Vec<String> = open_raw_filtered
-            .iter()
-            .chain(in_progress_raw.iter())
-            .chain(blocked_raw.iter())
-            .chain(done_raw.iter())
-            .map(|t| t.id.clone())
-            .collect();
-        let blocker_map = fetch_open_blockers(&db, &all_board_ids)?;
+        let empty_blockers = std::collections::HashMap::new();
         let pending = db.pending_user_comment_count_by_task(&scope_filter)?;
         let to_rows = |tasks: Vec<Task>| -> Vec<TaskRow> {
             tasks
                 .into_iter()
                 .map(|t| {
-                    TaskRow::from_task(t, &parents, &empty_child_counts, &blocker_map)
+                    TaskRow::from_task(t, &parents, &empty_child_counts, &empty_blockers)
+                        .with_open_blockers(&open_blockers)
                         .with_workspace(&scope)
                         .with_pending(&pending)
                 })

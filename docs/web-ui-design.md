@@ -209,8 +209,10 @@ task detail layout, epics progress and the create modal fields.
   a delegated click handler in `app.js` opens the modal for a click anywhere else on
   the card (not on links, buttons or controls), so drag and drop is untouched. Meta
   row order: id, priority, assignee, workspace badge (project/All scope), `💬 N`,
-  `blocked by N` chip whose tooltip lists the open blockers (`id: title`, taken from
-  the same query that already counted them). Done header: columns headers are flex
+  `⊘ blocked by tk-xxxx[, tk-yyyy]` marker (`board_blocked_by` macro) listing the open
+  blocker IDs, with `id: title` in the tooltip (one batch query, `open_blockers_by_task`).
+  The Blocked column holds only `status = blocked` tasks (human input needed); open tasks
+  waiting on a dependency stay in Open, after the ready ones, with that marker. Done header: columns headers are flex
   rows and the toggle has a fixed 20px box, which removes the vertical offset. Phones
   (480px and below): the board (and the epic board) is a flex row, 85vw columns,
   `scroll-snap-type: x mandatory`; tablets keep the 2x2 grid.
