@@ -627,6 +627,9 @@ mod tests {
         );
     }
 
+    // `cargo_bin!`/`cargo_bin_cmd!` need `CARGO_BIN_EXE_tk`, which cargo only sets for
+    // integration tests, so unit tests must use the (deprecated) runtime lookup.
+    #[allow(deprecated)]
     fn tk(db: &Path, ws: &Path) -> assert_cmd::Command {
         let mut c = assert_cmd::Command::cargo_bin("tk").unwrap();
         c.env("TACKS_DB", db).env("TACKS_WORKSPACE", ws);

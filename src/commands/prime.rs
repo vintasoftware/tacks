@@ -284,6 +284,9 @@ mod tests {
     use serde_json::Value;
     use tempfile::TempDir;
 
+    // `cargo_bin!`/`cargo_bin_cmd!` need `CARGO_BIN_EXE_tk`, which cargo only sets for
+    // integration tests, so unit tests must use the (deprecated) runtime lookup.
+    #[allow(deprecated)]
     fn tk(tmp: &TempDir) -> Command {
         let db_path = tmp.path().join("tacks.db");
         let mut cmd = Command::cargo_bin("tk").expect("tk binary not found");
@@ -296,6 +299,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // see `tk` helper above
     fn test_prime_silent_exit_when_no_db() {
         // prime should exit 0 silently when the database does not exist
         let tmp = TempDir::new().unwrap();
