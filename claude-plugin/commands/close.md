@@ -39,7 +39,7 @@ tk close <id> [-c <comment>] [-r <reason>] [--force]
 
 ```bash
 # Close with a comment
-tk close tk-a1b2 -c "Implemented and shipped in PR #42"
+tk close tk-a1b2 -c "Added input validation and tests"
 
 # Close as duplicate
 tk close tk-a1b2 -r duplicate -c "Duplicate of tk-c3d4"
@@ -53,6 +53,7 @@ tk close tk-a1b2 --force -c "Cancelling — requirements changed"
 
 ## Notes
 
+- Close a task when the code is written and verified (tests, lint, per the project's rules). Do not keep it `in_progress` waiting for a commit, push, PR, review, merge or deploy; those are not part of the task unless it asks for them. If the user wants more work, they comment on the task; if that comment arrives on a `done` task, reopen it with `tk update <id> -s in_progress`, do the work, reply with `tk comment`, then close again.
 - By default, `tk close` will refuse to close a task that has open subtasks (to protect the hierarchy). Use `--force` to override.
 - `tk close` refuses (exit 1) while the task has unanswered user comments (user feedback from the web UI). Address them and reply with `tk comment <id> "..."` first. Use `--force` only if the user agreed to close anyway.
 - `tk close` only works on tasks of the current workspace; for a task in the current project's backlog, rerun with `--scope backlog` (allowed without asking). If it refuses a task from another workspace, tell the user; do not rerun with `--scope project|all` unless they explicitly asked.

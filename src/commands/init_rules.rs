@@ -52,7 +52,14 @@ The project backlog holds tasks that belong to no workspace yet. `tk prime` show
 3. Claim it: `tk update <id> --claim`
 4. Add working notes: `tk update <id> --notes "context"`
 5. Blocked? Follow "When you are blocked" under Writing tasks
-6. Close when done: `tk close <id> -c "summary"`
+6. Done (see "Definition of done")? Close it: `tk close <id> -c "summary"`
+
+## Definition of done
+
+A task is done when you have written the code and verified it as the project's rules require (tests, lint, ...). Close it then.
+
+- Do not keep a task `in_progress` or `open` waiting for a commit, push, PR, review, merge or deploy. Those are not part of the task unless the task explicitly asks for them.
+- If the user wants more work, they comment on the task (see "User feedback").
 
 ## Writing tasks
 
@@ -113,7 +120,9 @@ The user answers by commenting on the task. Act on the comment, remove or update
 ## User feedback
 
 - The user can comment on tasks in the web UI. Those comments appear in `tk prime` ("User feedback awaiting reply"), in `tk show` (marked "awaiting reply"), and as hook notices during the session.
+- Comments are delivered on tasks of any status, including `done`.
 - Treat them as instructions from the user for that task: address them, then reply with `tk comment <id> "..."`.
+- On a `done` task: if the comment needs more work, reopen it (`tk update <id> -s in_progress`), do the work, reply with `tk comment`, then close it again. If it needs only an answer, reply with `tk comment` and leave it `done`.
 - `tk close` refuses while a task has unanswered user comments. Use `--force` only if the user agreed.
 - Never use `--author user` (or impersonate the user in any way): that author is reserved for the human user, and your replies must use the default author.
 
@@ -174,6 +183,22 @@ mod tests {
         assert!(RULES_CONTENT.contains("markdown"));
         assert!(RULES_CONTENT.contains("## Blocked"));
         assert!(RULES_CONTENT.contains("recommendation"));
+    }
+
+    #[test]
+    fn test_rules_describe_definition_of_done() {
+        assert!(RULES_CONTENT.contains("## Definition of done"));
+        assert!(RULES_CONTENT.contains("written the code"));
+        assert!(RULES_CONTENT.contains("waiting for a commit, push, PR, review, merge or deploy"));
+        assert!(RULES_CONTENT.contains("they comment on the task"));
+        assert!(RULES_CONTENT.contains("6. Done (see \"Definition of done\")?"));
+    }
+
+    #[test]
+    fn test_rules_describe_feedback_on_done_tasks() {
+        assert!(RULES_CONTENT.contains("including `done`"));
+        assert!(RULES_CONTENT.contains("tk update <id> -s in_progress"));
+        assert!(RULES_CONTENT.contains("leave it `done`"));
     }
 
     #[test]

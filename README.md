@@ -135,7 +135,7 @@ The sidebar shows **All**, then each project with its **Backlog** and its worksp
 
 A workspace whose directory was deleted shows a "missing" marker. Its tasks stay in the project, and you can move them to another workspace or to the project backlog from the task detail (or all its open tasks at once with "Move open tasks to backlog").
 
-Comments you add in the task detail are user feedback that agents must answer before closing the task (see `docs/user-feedback.md`). The server sanitizes rendered markdown and rejects cross-origin writes and non-loopback `Host` headers (see `docs/web-security.md`).
+Comments you add in the task detail are user feedback that agents must answer before closing the task, also on a task that is already done (the agent reopens it if more work is needed; see `docs/user-feedback.md`). The server sanitizes rendered markdown and rejects cross-origin writes and non-loopback `Host` headers (see `docs/web-security.md`).
 
 ### Board view
 

@@ -648,13 +648,14 @@ pub async fn api_close_task(
         db.get_task(&id)?
             .ok_or_else(|| format!("task not found: {id}"))?;
 
-        // Close the task
-        db.close_task(&id, reason_owned.as_deref())?;
-
-        // Add comment if provided
-        if let Some(ref comment) = comment_owned {
-            db.add_comment_by(&id, comment, Some("user"))?;
-        }
+        // The comment is written before the close so it predates `closed_at` and is
+        // not pending feedback; one transaction keeps both writes together.
+        db.with_savepoint(|| {
+            if let Some(ref comment) = comment_owned {
+                db.add_comment_by(&id, comment, Some("user"))?;
+            }
+            db.close_task(&id, reason_owned.as_deref())
+        })?;
 
         // Return the updated task
         db.get_task(&id)?

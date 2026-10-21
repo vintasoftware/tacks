@@ -21,10 +21,28 @@ answer feedback with a non-user comment, and the DB can be edited directly. The 
 
 ## Pending ("awaiting reply")
 
-A user comment is pending when its task is not `done` and no later comment by a non-user
-author (including legacy `NULL`) exists on that task. One agent reply answers all earlier
-user comments on the task. A new user comment after the reply is pending again. Closing the
-task ends pending state.
+A user comment is pending when no later comment by a non-user author (including legacy
+`NULL`) exists on that task, and either the task is not `done` or the comment was created
+after the task's `closed_at`. One agent reply answers all earlier user comments on the task.
+A new user comment after the reply is pending again.
+
+`tasks.closed_at` (schema v8, nullable, internal: not in the CLI or JSON) is set when the
+status becomes `done`, kept when a done task is closed again, and cleared when the task is
+reopened. Consequences:
+
+- Comments written before the close are not pending: closing ends the pending state of
+  everything the user said so far. This includes `tk close --force` and the web close
+  comment.
+- A user comment on a `done` task, written after the close, is pending. The agent sees it
+  in `tk prime` and the hook (marked `(done)`), and `tk close` guards it as for any
+  task.
+- Reopening a task (`tk update <id> -s in_progress`) clears `closed_at`, so its unanswered
+  earlier user comments are pending again until the agent replies.
+- Legacy done tasks (closed before v8) have `closed_at` NULL and never have pending
+  comments, so upgrading does not resurface old comments.
+- The web close (`POST /api/tasks/:id/close` with a comment) writes the user's comment
+  before closing the task, in one transaction, so it predates `closed_at` and is not
+  pending. `close_workspace_tasks` does the same with its comment.
 
 ## Delivery
 
@@ -70,8 +88,19 @@ does not count as a reply, because the comment is written after the close.
 ## Agent instructions
 
 Treat user comments as instructions for that task: address them, then reply with
-`tk comment <id> "..."`. This is stated in `tk init-rules`, the plugin agent and the
-`comment`, `close` and `prime` commands.
+`tk comment <id> "..."`. Comments are delivered on tasks of any status, including `done`
+(`tk prime` and the hook mark them `(done)` and hint how to reopen). On a `done` task, if
+the comment needs more work, reopen it (`tk update <id> -s in_progress`), do the work, reply
+with `tk comment`, then close it again; if it needs only an answer, reply and leave it
+`done`.
+
+Definition of done: a task is done when the agent has written the code and verified it per
+the project's rules (tests, lint, ...). The agent closes it then, and does not keep it
+`in_progress` or `open` waiting for a commit, push, PR, review, merge or deploy, unless the
+task explicitly asks for them. If the user wants more work, they comment on the task.
+
+This is stated in `tk init-rules`, the plugin agent and the `comment`, `close`, `prime` and
+`update` commands.
 
 ## Web UI
 

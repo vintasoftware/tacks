@@ -9,7 +9,7 @@ use crate::models::{
 };
 
 /// Latest schema version known to this build.
-const LATEST_SCHEMA_VERSION: i32 = 7;
+const LATEST_SCHEMA_VERSION: i32 = 8;
 
 /// Hash lengths (hex chars) tried by `generate_id`, shortest first.
 const ID_HASH_LENGTHS: [usize; 3] = [4, 5, 6];
@@ -271,17 +271,21 @@ impl Database {
     /// - Without a workspace, `task.project_id` places the task in that project's backlog;
     ///   `None` leaves it unscoped. A subtask of a backlog parent that carries neither
     ///   inherits the parent's project, so subtasks stay with their parent.
+    ///
+    /// A task inserted with status `done` gets `closed_at` = now (see
+    /// [`Database::update_task_with_parent`]).
     pub fn insert_task(&self, task: &Task) -> Result<(), String> {
         let tags_str = task.tags.join(",");
         self.conn
             .execute(
-                "INSERT INTO tasks (id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id, project_id)
+                "INSERT INTO tasks (id, title, description, status, priority, assignee, parent_id, tags, created_at, updated_at, close_reason, notes, workspace_id, project_id, closed_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                          COALESCE(
                              (SELECT project_id FROM workspaces WHERE id = ?13),
                              ?14,
                              (SELECT p.project_id FROM tasks p
-                              WHERE p.id = ?7 AND p.workspace_id IS NULL)))",
+                              WHERE p.id = ?7 AND p.workspace_id IS NULL)),
+                         CASE WHEN ?4 = 'done' THEN ?15 ELSE NULL END)",
                 params![
                     task.id,
                     task.title,
@@ -297,6 +301,7 @@ impl Database {
                     task.notes,
                     task.workspace_id,
                     task.project_id,
+                    Utc::now().to_rfc3339(),
                 ],
             )
             .map_err(|e| format!("failed to insert task: {e}"))?;
@@ -463,6 +468,13 @@ impl Database {
 
     /// Update task fields, optionally reparenting to a new parent.
     ///
+    /// Also maintains the internal `tasks.closed_at` (RFC3339, same format as
+    /// `comments.created_at`): set to now when `status` moves a task from non-done to
+    /// `done`, kept as is when an already-done task is set to `done` again (including
+    /// legacy done tasks where it is NULL), and cleared when `status` is set to anything
+    /// other than `done`. This is the only code path that writes `tasks.status`
+    /// (`close_task`, `sync_epic_status` and `close_workspace_tasks` go through it).
+    ///
     /// `new_parent` uses a two-level Option:
     /// - `None` — do not change parent_id
     /// - `Some(Some("tk-xxxx"))` — set parent_id to the given task
@@ -532,6 +544,18 @@ impl Database {
             sets.push(format!("status = ?{idx}"));
             param_values.push(Box::new(s.to_string()));
             idx += 1;
+            // Internal `closed_at` bookkeeping (not part of `Task`/JSON). SET expressions
+            // read the old row, so `status` below is the status before this update.
+            if s == "done" {
+                // Stamp only on the transition into done; re-closing keeps the original.
+                sets.push(format!(
+                    "closed_at = CASE WHEN status != 'done' THEN ?{idx} ELSE closed_at END"
+                ));
+                param_values.push(Box::new(Utc::now().to_rfc3339()));
+                idx += 1;
+            } else {
+                sets.push("closed_at = NULL".to_string());
+            }
         }
         if let Some(d) = description {
             sets.push(format!("description = ?{idx}"));
@@ -971,9 +995,15 @@ impl Database {
     }
 
     /// Shared query for pending user comments. A comment is pending when it is authored by
-    /// `user`, its task is not done, and no non-user comment (NULL author counts as
-    /// non-user) on the same task has a higher id (ids are monotonic, so this is
-    /// "created after" without timestamp ties).
+    /// `user`, no non-user comment (NULL author counts as non-user) on the same task has a
+    /// higher id (ids are monotonic, so this is "created after" without timestamp ties),
+    /// and either the task is not done, or it is done and the comment was written after
+    /// the task was closed (`c.created_at > t.closed_at`, strict: a comment with the exact
+    /// same timestamp as the close counts as written before it). Comments written before
+    /// the close stop being pending when the task is closed. Done tasks with a NULL
+    /// `closed_at` (closed before migration v8) never have pending comments. Both
+    /// timestamps are `Utc::now().to_rfc3339()` strings, so string comparison is
+    /// chronological.
     fn pending_query(
         &self,
         scope: &ScopeFilter,
@@ -983,7 +1013,8 @@ impl Database {
         let mut sql = format!(
             "SELECT c.id, c.task_id, c.body, c.created_at, c.author, t.title, t.status
              FROM comments c JOIN tasks t ON t.id = c.task_id
-             WHERE c.author = 'user' AND t.status != 'done'
+             WHERE c.author = 'user'
+               AND (t.status != 'done' OR (t.closed_at IS NOT NULL AND c.created_at > t.closed_at))
                AND NOT EXISTS (SELECT 1 FROM comments r WHERE r.task_id = c.task_id
                                AND r.id > c.id AND (r.author IS NULL OR r.author != 'user')){extra}"
         );
@@ -1039,7 +1070,9 @@ impl Database {
         Ok(counts)
     }
 
-    /// Pending user comments for one task (empty when the task is done or missing).
+    /// Pending user comments for one task, same rule as [`Database::pending_user_comments`]:
+    /// on a done task only comments written after it was closed count (empty when there
+    /// are none or the task is missing).
     pub fn task_pending_user_comments(&self, task_id: &str) -> Result<Vec<Comment>, String> {
         Ok(self
             .pending_query(&ScopeFilter::All, Some(task_id), "")?
@@ -1060,18 +1093,31 @@ impl Database {
     ///
     /// One query, no scope resolution. Works on a read-only connection; an older schema
     /// without the `author`/`delivered_at` columns yields `false` instead of an error.
+    /// Same pending rule as [`Database::pending_user_comments`]. A schema that has those
+    /// columns but not `tasks.closed_at` (v4 to v7) falls back to the pre-v8 rule (task
+    /// not done), since no done task can have post-close comments there.
     pub fn any_undelivered_pending_user_comment(&self) -> bool {
-        self.conn
-            .query_row(
-                "SELECT 1 FROM comments c JOIN tasks t ON t.id = c.task_id
-                 WHERE c.author = 'user' AND c.delivered_at IS NULL AND t.status != 'done'
-                   AND NOT EXISTS (SELECT 1 FROM comments r WHERE r.task_id = c.task_id
-                                   AND r.id > c.id AND (r.author IS NULL OR r.author != 'user'))
-                 LIMIT 1",
-                [],
-                |_| Ok(()),
-            )
-            .is_ok()
+        const PROBE: &str = "SELECT 1 FROM comments c JOIN tasks t ON t.id = c.task_id
+             WHERE c.author = 'user' AND c.delivered_at IS NULL AND ({closed})
+               AND NOT EXISTS (SELECT 1 FROM comments r WHERE r.task_id = c.task_id
+                               AND r.id > c.id AND (r.author IS NULL OR r.author != 'user'))
+             LIMIT 1";
+        for closed in [
+            "t.status != 'done' OR (t.closed_at IS NOT NULL AND c.created_at > t.closed_at)",
+            "t.status != 'done'",
+        ] {
+            match self
+                .conn
+                .query_row(&PROBE.replace("{closed}", closed), [], |_| Ok(()))
+            {
+                Ok(()) => return true,
+                // The query ran: "no row" is authoritative, do not fall back.
+                Err(rusqlite::Error::QueryReturnedNoRows) => return false,
+                // Missing column (older schema): try the next, older rule.
+                Err(_) => {}
+            }
+        }
+        false
     }
 
     /// Atomically claim undelivered pending user comments of `scope` for delivery.
@@ -1572,8 +1618,8 @@ impl Database {
     }
 
     /// Close every not-done task of a workspace in one transaction, with `reason` as the
-    /// close reason. When `comment` is given it is added (with `author`) to each closed
-    /// task. Parent epic statuses are synced like `close_task` does. Already-done tasks are
+    /// close reason. When `comment` is given it is added (with `author`) to each task just
+    /// before it is closed, so it is never pending feedback. Parent epic statuses are synced like `close_task` does. Already-done tasks are
     /// untouched. Returns the number of tasks closed.
     pub fn close_workspace_tasks(
         &self,
@@ -1601,10 +1647,12 @@ impl Database {
             drop(stmt);
 
             for id in &ids {
-                self.close_task(id, Some(reason))?;
+                // Written before the close so it predates `closed_at` and never counts
+                // as pending feedback (even when `author` is `user`).
                 if let Some(body) = comment {
                     self.add_comment_by(id, body, author)?;
                 }
+                self.close_task(id, Some(reason))?;
             }
             Ok(ids.len())
         })
@@ -2036,6 +2084,13 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
                  (SELECT w.project_id FROM workspaces w WHERE w.id = tasks.workspace_id)
              WHERE workspace_id IS NOT NULL;",
         )?;
+    }
+
+    if version < 8 {
+        // Internal close timestamp (RFC3339) used to tell user comments written after a
+        // task was closed from earlier ones. Not part of `Task`/JSON. Existing done tasks
+        // keep NULL on purpose: their old comments never become pending.
+        apply_migration(conn, 8, "ALTER TABLE tasks ADD COLUMN closed_at TEXT;")?;
     }
 
     Ok(())
@@ -2990,6 +3045,350 @@ mod tests {
         db.close_task(&d.id, None).unwrap();
         assert!(db.pending_user_comments(&all).unwrap().is_empty());
         assert!(db.task_pending_user_comments(&d.id).unwrap().is_empty());
+    }
+
+    /// Sleep long enough that consecutive `Utc::now()` timestamps differ.
+    fn tick() {
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+
+    fn closed_at_of(db: &Database, id: &str) -> Option<String> {
+        db.conn
+            .query_row(
+                "SELECT closed_at FROM tasks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .expect("closed_at")
+    }
+
+    fn pending_ids(db: &Database, task_id: &str) -> Vec<i64> {
+        db.task_pending_user_comments(task_id)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    }
+
+    #[test]
+    fn test_pending_comment_before_close_not_pending_after_close() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.add_comment_by(&t.id, "before", Some("user")).unwrap();
+        tick();
+        assert_eq!(pending_ids(&db, &t.id).len(), 1);
+        db.close_task(&t.id, None).unwrap();
+        assert!(closed_at_of(&db, &t.id).is_some());
+        assert!(pending_ids(&db, &t.id).is_empty());
+        assert!(
+            db.pending_user_comments(&ScopeFilter::All)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!db.any_undelivered_pending_user_comment());
+    }
+
+    #[test]
+    fn test_pending_comment_after_close_is_pending() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.add_comment_by(&t.id, "before", Some("user")).unwrap();
+        tick();
+        db.close_task(&t.id, None).unwrap();
+        tick();
+        let after = db.add_comment_by(&t.id, "after", Some("user")).unwrap();
+        // Only the post-close comment is pending; the pre-close one stays cleared.
+        assert_eq!(pending_ids(&db, &t.id), vec![after.id]);
+        let all = db.pending_user_comments(&ScopeFilter::All).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].task_status, "done");
+        assert!(db.any_undelivered_pending_user_comment());
+        assert_eq!(
+            db.pending_user_comment_count_by_task(&ScopeFilter::All)
+                .unwrap()[&t.id],
+            1
+        );
+    }
+
+    #[test]
+    fn test_agent_reply_after_close_clears_post_close_comment() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.close_task(&t.id, None).unwrap();
+        tick();
+        db.add_comment_by(&t.id, "after", Some("user")).unwrap();
+        assert_eq!(pending_ids(&db, &t.id).len(), 1);
+        tick();
+        db.add_comment_by(&t.id, "reply", Some("agent")).unwrap();
+        assert!(pending_ids(&db, &t.id).is_empty());
+        assert!(!db.any_undelivered_pending_user_comment());
+        // A newer user comment is pending again.
+        tick();
+        let again = db.add_comment_by(&t.id, "again", Some("user")).unwrap();
+        assert_eq!(pending_ids(&db, &t.id), vec![again.id]);
+    }
+
+    #[test]
+    fn test_reopen_keeps_post_close_comment_pending_and_clears_closed_at() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.close_task(&t.id, None).unwrap();
+        tick();
+        let after = db.add_comment_by(&t.id, "after", Some("user")).unwrap();
+        db.update_task(
+            &t.id,
+            None,
+            None,
+            Some("in_progress"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(closed_at_of(&db, &t.id), None);
+        assert_eq!(pending_ids(&db, &t.id), vec![after.id]);
+        // Closing again stamps a fresh closed_at, ending pending state for it.
+        tick();
+        db.close_task(&t.id, None).unwrap();
+        assert!(closed_at_of(&db, &t.id).is_some());
+        assert!(pending_ids(&db, &t.id).is_empty());
+    }
+
+    #[test]
+    fn test_legacy_done_task_with_null_closed_at_never_pending() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.add_comment_by(&t.id, "old", Some("user")).unwrap();
+        // Simulate a task closed before migration v8.
+        set_status(&db, &t.id, "done");
+        assert_eq!(closed_at_of(&db, &t.id), None);
+        tick();
+        db.add_comment_by(&t.id, "newer", Some("user")).unwrap();
+        assert!(pending_ids(&db, &t.id).is_empty());
+        assert!(!db.any_undelivered_pending_user_comment());
+        // Re-closing a legacy done task keeps NULL (nothing old can surface).
+        db.close_task(&t.id, None).unwrap();
+        assert_eq!(closed_at_of(&db, &t.id), None);
+        assert!(pending_ids(&db, &t.id).is_empty());
+    }
+
+    #[test]
+    fn test_reclose_does_not_move_closed_at_or_hide_pending_comment() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.close_task(&t.id, None).unwrap();
+        let first = closed_at_of(&db, &t.id).expect("closed_at set");
+        tick();
+        let after = db.add_comment_by(&t.id, "after", Some("user")).unwrap();
+        tick();
+        db.close_task(&t.id, Some("duplicate")).unwrap();
+        db.update_task(&t.id, None, None, Some("done"), None, None, None, None)
+            .unwrap();
+        assert_eq!(closed_at_of(&db, &t.id), Some(first));
+        assert_eq!(pending_ids(&db, &t.id), vec![after.id]);
+    }
+
+    #[test]
+    fn test_closed_at_comparison_is_strict_and_chronological() {
+        let (db, _d) = open_test_db();
+        let t = make_task(&db, "t");
+        db.close_task(&t.id, None).unwrap();
+        let set = |closed: &str, created: &str| {
+            db.conn
+                .execute(
+                    "UPDATE tasks SET closed_at = ?1 WHERE id = ?2",
+                    params![closed, t.id],
+                )
+                .unwrap();
+            db.conn
+                .execute(
+                    "UPDATE comments SET created_at = ?1 WHERE task_id = ?2",
+                    params![created, t.id],
+                )
+                .unwrap();
+            pending_ids(&db, &t.id).len()
+        };
+        db.add_comment_by(&t.id, "c", Some("user")).unwrap();
+        let ts = |s: &str| {
+            DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&Utc)
+                .to_rfc3339()
+        };
+        let sec = ts("2026-05-01T10:00:00Z");
+        let sub = ts("2026-05-01T10:00:00.250Z");
+        let micro = ts("2026-05-01T10:00:00.250001Z");
+        let next = ts("2026-05-01T10:00:01Z");
+        assert_eq!(sec, "2026-05-01T10:00:00+00:00");
+        // Equal timestamps: written "before" the close, not pending (strict `>`).
+        assert_eq!(set(&sec, &sec), 0);
+        assert_eq!(set(&sub, &sub), 0);
+        // Whole-second close vs fractional comment in the same second, and vice versa.
+        assert_eq!(set(&sec, &sub), 1);
+        assert_eq!(set(&sub, &sec), 0);
+        // Different fractional widths (3 vs 6 digits) still order correctly.
+        assert_eq!(set(&sub, &micro), 1);
+        assert_eq!(set(&micro, &sub), 0);
+        assert_eq!(set(&sec, &next), 1);
+        assert_eq!(set(&next, &sec), 0);
+    }
+
+    #[test]
+    fn test_close_sets_closed_at_on_every_status_write_path() {
+        let (db, _d) = open_test_db();
+        // update_task with status, and reopening clears it.
+        let a = make_task(&db, "a");
+        db.update_task(&a.id, None, None, Some("done"), None, None, None, None)
+            .unwrap();
+        assert!(closed_at_of(&db, &a.id).is_some());
+        db.update_task(&a.id, None, None, Some("blocked"), None, None, None, None)
+            .unwrap();
+        assert_eq!(closed_at_of(&db, &a.id), None);
+        // Updates that do not touch status leave closed_at alone.
+        db.close_task(&a.id, None).unwrap();
+        let at = closed_at_of(&db, &a.id);
+        db.update_task(
+            &a.id,
+            Some("renamed"),
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+            Some("n"),
+        )
+        .unwrap();
+        assert_eq!(closed_at_of(&db, &a.id), at);
+
+        // Epic auto-status: closing the only child closes the epic and stamps it.
+        let epic = make_task(&db, "epic");
+        let mut child = make_task(&db, "child");
+        child.parent_id = Some(epic.id.clone());
+        db.update_task_with_parent(
+            &child.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(&epic.id)),
+        )
+        .unwrap();
+        db.close_task(&child.id, None).unwrap();
+        assert_eq!(db.get_task(&epic.id).unwrap().unwrap().status, Status::Done);
+        assert!(closed_at_of(&db, &epic.id).is_some());
+        // Reopening the child moves the epic back and clears its closed_at.
+        db.update_task(&child.id, None, None, Some("open"), None, None, None, None)
+            .unwrap();
+        db.sync_epic_status(&epic.id).unwrap();
+        assert_eq!(closed_at_of(&db, &epic.id), None);
+
+        // Workspace bulk close.
+        let (_p, w, _w2) = {
+            let (p1, _p2, w1, w2, _w3) = setup_scopes(&db);
+            (p1, w1, w2)
+        };
+        let t = task_in(&db, "ws", Some(w.id));
+        db.close_workspace_tasks(w.id, "stale", None, None).unwrap();
+        assert!(closed_at_of(&db, &t.id).is_some());
+
+        // Insert as done stamps it; insert as open does not.
+        let mut d = make_task(&db, "d");
+        assert_eq!(closed_at_of(&db, &d.id), None);
+        d.id = db.generate_id().unwrap();
+        d.status = Status::Done;
+        db.insert_task(&d).unwrap();
+        assert!(closed_at_of(&db, &d.id).is_some());
+    }
+
+    #[test]
+    fn test_close_workspace_tasks_user_comment_is_not_pending() {
+        let (db, _d) = open_test_db();
+        let (_p1, _p2, w1, _w2, _w3) = setup_scopes(&db);
+        let a = task_in(&db, "a", Some(w1.id));
+        let b = task_in(&db, "b", Some(w1.id));
+        let n = db
+            .close_workspace_tasks(w1.id, "stale", Some("workspace removed"), Some("user"))
+            .unwrap();
+        assert_eq!(n, 2);
+        for t in [&a, &b] {
+            assert_eq!(db.get_comments(&t.id).unwrap().len(), 1);
+            assert!(closed_at_of(&db, &t.id).is_some());
+            assert!(pending_ids(&db, &t.id).is_empty());
+        }
+        assert!(
+            db.pending_user_comments(&ScopeFilter::All)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!db.any_undelivered_pending_user_comment());
+    }
+
+    #[test]
+    fn test_migration_v8_adds_closed_at_and_leaves_done_tasks_null() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("v7.db");
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE tasks (
+                     id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+                     status TEXT NOT NULL DEFAULT 'open', priority INTEGER NOT NULL DEFAULT 2,
+                     assignee TEXT, parent_id TEXT, tags TEXT NOT NULL DEFAULT '',
+                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                     close_reason TEXT, notes TEXT, workspace_id INTEGER, project_id INTEGER);
+                 CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL);
+                 CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     project_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                     name TEXT NOT NULL, created_at TEXT NOT NULL,
+                     archived_at TEXT, restored_at TEXT);
+                 CREATE TABLE dependencies (child_id TEXT NOT NULL, parent_id TEXT NOT NULL,
+                     PRIMARY KEY (child_id, parent_id));
+                 CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     task_id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
+                     author TEXT, delivered_at TEXT);
+                 INSERT INTO config VALUES ('schema_version', '7');
+                 INSERT INTO tasks (id, title, status, created_at, updated_at) VALUES
+                     ('tk-done', 'done', 'done', '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00'),
+                     ('tk-open', 'open', 'open', '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00');
+                 INSERT INTO comments (task_id, body, created_at, author) VALUES
+                     ('tk-done', 'old', '2024-01-02T00:00:00+00:00', 'user');",
+            )
+            .expect("seed v7");
+        }
+        // Probe on v7 (no closed_at yet): falls back to the pre-v8 rule, no error.
+        {
+            let ro = Database::open_read_only(&path).unwrap();
+            assert!(!ro.any_undelivered_pending_user_comment());
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO comments (task_id, body, created_at, author)
+                 VALUES ('tk-open', 'hi', '2024-01-02T00:00:00+00:00', 'user')",
+                [],
+            )
+            .unwrap();
+        }
+        {
+            let ro = Database::open_read_only(&path).unwrap();
+            assert!(ro.any_undelivered_pending_user_comment());
+        }
+        let db = Database::open(&path).expect("open migrates");
+        assert_eq!(get_schema_version(&db.conn).unwrap(), LATEST_SCHEMA_VERSION);
+        assert_eq!(LATEST_SCHEMA_VERSION, 8);
+        assert_eq!(closed_at_of(&db, "tk-done"), None);
+        assert_eq!(closed_at_of(&db, "tk-open"), None);
+        assert!(pending_ids(&db, "tk-done").is_empty());
+        assert_eq!(pending_ids(&db, "tk-open").len(), 1);
+        // A new user comment on the legacy done task does not surface either.
+        db.add_comment_by("tk-done", "new", Some("user")).unwrap();
+        assert!(pending_ids(&db, "tk-done").is_empty());
     }
 
     #[test]

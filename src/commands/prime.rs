@@ -151,10 +151,21 @@ fn print_markdown(
         println!(
             "The user commented on these tasks. Treat each comment as an instruction for that task: address it, then reply with `tk comment <id> \"...\"`."
         );
-        for p in feedback {
+        if feedback.iter().any(|p| p.task_status == "done") {
             println!(
-                "- {}: {} ({})",
+                "A (done) task is closed: if the comment needs more work, reopen it with `tk update <id> -s in_progress`, do the work, reply, then close it again; if it only needs an answer, reply and leave it done."
+            );
+        }
+        for p in feedback {
+            let marker = if p.task_status == "done" {
+                " (done)"
+            } else {
+                ""
+            };
+            println!(
+                "- {}{}: {} ({})",
                 p.task_id,
+                marker,
                 p.task_title,
                 p.comment.created_at.format("%Y-%m-%d %H:%M")
             );

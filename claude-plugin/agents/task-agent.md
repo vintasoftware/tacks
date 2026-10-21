@@ -30,7 +30,7 @@ Tasks are sorted by priority (P0 first). Pick the highest-priority unblocked tas
 tk show <id> --json
 ```
 
-Read the title, description, tags, notes, and any blockers. Understand what "done" looks like before starting.
+Read the title, description, tags, notes, and any blockers. Understand what "done" looks like before starting. Done means you have written the code and verified it; it does not include committing, pushing, a PR, review, merge or deploy unless the task asks for them.
 
 ### 4. Claim the task
 
@@ -57,7 +57,7 @@ Never pass `--author user` to `tk comment`: that author is reserved for the huma
 Before closing, verify the work is actually complete:
 - Run tests if applicable
 - Check that the acceptance criteria in the description are met
-- Confirm any artifacts (files, commits, etc.) are in place
+- Confirm the files and changes the task asks for are in place
 
 ### 7. Close the task
 
@@ -65,7 +65,7 @@ Before closing, verify the work is actually complete:
 tk close <id> -c "Brief description of what was done"
 ```
 
-Use `-r done` if the work is complete and correct. Use `-r absorbed` if the task turned out to be covered by something else you did. Do not close a task unless the work is genuinely done.
+Close the task as soon as the code is written and verified. Do not leave it `in_progress` (or `open`) waiting for a commit, push, PR, review, merge or deploy: those are not part of the task unless it explicitly asks for them. If the user wants more work, they comment on the task. Use `-r done` if the work is complete and correct. Use `-r absorbed` if the task turned out to be covered by something else you did. Do not close a task unless the work is genuinely done.
 
 ### 8. Continue
 
@@ -79,7 +79,7 @@ Check for newly unblocked work (closing a task may have unblocked its dependents
 
 **Claim before working.** Never start executing a task without claiming it first.
 
-**Close when done, not before.** If you close a task that isn't actually done, future agents or sessions will assume it's complete and skip it.
+**Close when done, not before, and not after.** Done means the code is written and verified (tests, lint, per the project's rules). If you close a task that isn't actually done, future agents or sessions will assume it's complete and skip it. If you keep a finished task `in_progress` because the work is not committed, pushed, reviewed or merged, the user sees work that is not actually in progress. Close it.
 
 **File discoveries, don't silently skip them.** When you notice something broken, missing, or worth doing, file a task. Write the description for the human reviewer, who reads it in the web UI without your context: **Context** (why, what you found), **Approach** (plan, rejected alternatives), **Done when** (`- [ ]` checklist), **Open questions**. Keep it current with `tk update <id> -d` as you learn things; notes are only for short-lived working state. Use `tk dep add` to wire it into the dependency graph so it surfaces at the right time.
 
@@ -113,7 +113,7 @@ EOF
 
 **Park out-of-scope work in the backlog.** The project backlog holds tasks that belong to no workspace. File work you find that is out of scope for this workspace with `tk create <title> --to-backlog` (or `tk update <id> --to-backlog`). `tk prime` shows a line when the backlog has open tasks. You may list (`tk list --scope backlog`, `tk ready --scope backlog`), claim (`tk update <id> --claim --scope backlog`, which moves it into this workspace), update, comment on and close backlog tasks with `--scope backlog` without asking the user.
 
-**Act on user feedback.** The user may comment on tasks in the web UI. Unanswered user comments show up in `tk prime` ("User feedback awaiting reply" / `user_feedback`), in `tk show` (`pending_user_comments`, "awaiting reply") and as hook notices during the session. Treat them as instructions from the user for that task: address them, then reply with `tk comment <id> "..."`. `tk close` refuses while a task has unanswered user comments; use `--force` only if the user agreed.
+**Act on user feedback.** The user may comment on tasks in the web UI. Unanswered user comments show up in `tk prime` ("User feedback awaiting reply" / `user_feedback`), in `tk show` (`pending_user_comments`, "awaiting reply") and as hook notices during the session. Comments are delivered on tasks of any status, including `done` (marked "(done)" in `tk prime` and hook notices). Treat them as instructions from the user for that task: address them, then reply with `tk comment <id> "..."`. On a `done` task: if the comment needs more work, reopen it (`tk update <id> -s in_progress`), do the work, reply with `tk comment`, then close it again; if it needs only an answer, reply with `tk comment` and leave it `done`. `tk close` refuses while a task has unanswered user comments; use `--force` only if the user agreed.
 
 **Use `--json` for all tk commands.** Structured output is unambiguous and parse-safe. Human-readable output is for display only.
 

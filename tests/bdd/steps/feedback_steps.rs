@@ -92,3 +92,24 @@ async fn tk_output_contains_resolved(world: &mut TacksWorld, expected: String) {
         world.last_stdout
     );
 }
+
+#[then(expr = "the JSON output has no field {string}")]
+async fn json_output_has_no_field(world: &mut TacksWorld, field: String) {
+    let json: Value = serde_json::from_str(&world.last_stdout).expect("stdout is JSON");
+    assert!(
+        json.get(&field).is_none(),
+        "expected no field {field:?}; json: {json}"
+    );
+}
+
+#[then(expr = "the file {string} in {string} contains {string}")]
+async fn file_in_dir_contains(world: &mut TacksWorld, file: String, dir: String, expected: String) {
+    let path = dir_of(world, &dir).join(&file);
+    let content = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    assert!(
+        content.contains(&expected),
+        "{} does not contain {expected:?}",
+        path.display()
+    );
+}

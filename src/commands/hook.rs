@@ -99,13 +99,21 @@ pub fn post_tool_use_in(input: &str, db_path: &Path, explicit: Option<&Path>) ->
     let ws = db.find_workspace_by_path(&resolved.workspace_path).ok()??;
 
     let mut text = String::from(
-        "tacks: the user left feedback on tasks in this workspace. Treat each comment as an instruction for that task: address it, then reply with `tk comment <id> \"...\"` (tk close refuses while it is unanswered).\n",
+        "tacks: the user left feedback on tasks in this workspace. Treat each comment as an instruction for that task: address it, then reply with `tk comment <id> \"...\"` (tk close refuses while it is unanswered). A task marked (done) is closed: if the comment needs more work, reopen it with `tk update <id> -s in_progress`, do the work, reply, then close it again; if it only needs an answer, reply and leave it done.\n",
     );
     // Claim atomically, in order, only what fits; rows another process claimed are skipped.
     let (claimed, more) = db
         .claim_undelivered_pending_user_comments(&ScopeFilter::Workspace(ws.id), |p| {
             let body = truncate_chars(&p.comment.body.replace('\n', " "), MAX_BODY_CHARS);
-            let line = format!("- {} ({}): \"{}\"\n", p.task_id, p.task_title, body);
+            let marker = if p.task_status == "done" {
+                " (done)"
+            } else {
+                ""
+            };
+            let line = format!(
+                "- {}{} ({}): \"{}\"\n",
+                p.task_id, marker, p.task_title, body
+            );
             // reserve room for the trailing "more" note
             if text.chars().count() + line.chars().count() + 80 > MAX_CONTEXT_CHARS {
                 return false;
@@ -674,6 +682,39 @@ mod tests {
         assert!(post_tool_use_in(&input, &db, Some(&ws)).is_none());
         // garbage input is silent
         assert!(post_tool_use_in("garbage", &db, Some(&ws)).is_none());
+    }
+
+    #[test]
+    fn post_tool_use_marks_feedback_on_done_task() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("t.db");
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        let input =
+            json!({"cwd": ws.to_string_lossy(), "hook_event_name": "PostToolUse"}).to_string();
+        tk(&db, &ws).arg("init").assert().success();
+        let out = tk(&db, &ws)
+            .args(["--json", "create", "do it"])
+            .output()
+            .unwrap();
+        let id = serde_json::from_slice::<Value>(&out.stdout).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        tk(&db, &ws).args(["close", &id]).assert().success();
+        tk(&db, &ws)
+            .args(["comment", &id, "one more thing", "--author", "user"])
+            .assert()
+            .success();
+
+        let out = post_tool_use_in(&input, &db, Some(&ws)).expect("feedback expected");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let ctx = v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(ctx.contains(&format!("- {id} (done) (do it)")));
+        assert!(ctx.contains("tk update <id> -s in_progress"));
+        assert!(ctx.chars().count() <= MAX_CONTEXT_CHARS);
     }
 
     #[test]
