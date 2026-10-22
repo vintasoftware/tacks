@@ -97,6 +97,12 @@ Feature: Web view pages
     Then the response status is 200
     And the response body contains "Open board task"
 
+  Scenario: Top navigation lists Board, Issues, Epics in that order
+    When I GET "/board"
+    Then the response status is 200
+    And the response body contains 'id="nav-board"' before 'id="nav-issues"'
+    And the response body contains 'id="nav-issues"' before 'id="nav-epics"'
+
   # ---------------------------------------------------------------------------
   # Epic view — GET /epics
   # ---------------------------------------------------------------------------

@@ -253,3 +253,22 @@ async fn the_response_body_does_not_contain(world: &mut TacksWorld, unexpected: 
         "expected response body NOT to contain {unexpected:?}, but it was found in body:\n{body}"
     );
 }
+
+/// Assert that `first` appears in the most recent HTTP response body before `second`.
+#[then(expr = "the response body contains {string} before {string}")]
+async fn the_response_body_contains_before(world: &mut TacksWorld, first: String, second: String) {
+    let body = world
+        .last_response_body
+        .as_deref()
+        .expect("no HTTP response body recorded — did you make a request?");
+    let a = body
+        .find(&first)
+        .unwrap_or_else(|| panic!("expected response body to contain {first:?}"));
+    let b = body
+        .find(&second)
+        .unwrap_or_else(|| panic!("expected response body to contain {second:?}"));
+    assert!(
+        a < b,
+        "expected {first:?} (at {a}) to come before {second:?} (at {b})"
+    );
+}
