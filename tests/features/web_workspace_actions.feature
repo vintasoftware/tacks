@@ -59,15 +59,18 @@ Feature: Workspace actions and pass-2 views in the web UI
       | /p/@project(A)/board  |
       | /tasks                |
 
-  Scenario: the sidebar moves an archived workspace into the Archived group
+  Scenario: the sidebar replaces an archived workspace with a link to the archived page
     When I GET resolved "/board"
     Then the sidebar lists workspace "A"
-    And the response body does not contain "Archived"
+    And the response body does not contain "Archived workspaces"
     When I POST resolved "/api/workspaces/@workspace(A)/archive" with body "{}"
     And I GET resolved "/board"
     Then the response body does not contain resolved 'data-scope-prefix="/p/@project(A)/w/@workspace(A)"'
     And the sidebar lists workspace "B"
-    And the response body contains "Archived"
+    And the response body does not contain "data-ws-restore"
+    And the response body contains "Archived workspaces"
+    When I GET "/archived"
+    Then the response status is 200
     And the response body contains resolved 'data-ws-restore="@workspace(A)"'
 
   Scenario: task detail of an archived workspace still works and says archived

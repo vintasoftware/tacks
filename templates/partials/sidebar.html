@@ -44,17 +44,7 @@
     </li>
     {% endfor %}
   </ul>
-  {% if !sb.archived.is_empty() %}
-  <details class="scope-archived">
-    <summary>Archived <span class="scope-count">{{ sb.archived.len() }}</span></summary>
-    <ul class="scope-list">
-      {% for a in sb.archived.iter() %}
-      <li class="scope-archived-item">
-        <span class="scope-name" title="{{ a.project_name }} / {{ a.name }}: {{ a.path }}">{{ a.name }}</span>
-        <button type="button" class="scope-restore secondary outline" data-ws-restore="{{ a.id }}" data-ws-name="{{ a.name }}" aria-label="Restore workspace {{ a.name }}">Restore</button>
-      </li>
-      {% endfor %}
-    </ul>
-  </details>
+  {% if sb.archived_count > 0 %}
+  <a class="scope-archived-link" href="/archived">Archived workspaces ({{ sb.archived_count }})</a>
   {% endif %}
 </aside>

@@ -204,6 +204,8 @@ pub fn create_router(state: AppState) -> Router {
     let router = add_scoped_routes(router, "/p/{project_id}/w/{workspace_id}");
     router
         // Task detail and dep trees stay global (any task, whatever the scope)
+        // Archived workspaces of every project (not scoped per project)
+        .route("/archived", get(handlers::archived))
         .route("/tasks/{id}/dep-tree", get(handlers::task_dep_tree))
         .route("/tasks/{id}/comments", get(handlers::task_comments))
         .route("/tasks/{id}", get(handlers::task_detail))

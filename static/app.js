@@ -244,7 +244,7 @@
           wsEl('p', 'This hides the workspace and its ' + plural(n, 'open task', 'open tasks') +
             ' (plus any done tasks) from the web UI: sidebar, boards, lists, epics and counts.'),
           wsEl('p', 'Nothing is deleted. Tasks keep their status, comments and notes, and the files on disk are not touched.'),
-          wsEl('p', 'You can bring it back with "Restore" in the Archived group of the sidebar, or it comes back automatically when a task is created there (tk create) or moved there (tk update --move-to).')
+          wsEl('p', 'You can bring it back with "Restore" on the Archived workspaces page (link at the bottom of the sidebar), or it comes back automatically when a task is created there (tk create) or moved there (tk update --move-to).')
         ],
         confirm: 'Remove workspace',
         danger: true,

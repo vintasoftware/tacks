@@ -1575,6 +1575,31 @@ pub struct EpicsQuery {
     pub priority: Option<String>,
 }
 
+/// One archived workspace on the archived page.
+struct ArchivedRow {
+    id: i64,
+    name: String,
+    path: String,
+    /// Tasks that are not done (they stay hidden until the workspace is restored).
+    open: i64,
+    /// Archive date (`YYYY-MM-DD`), when known.
+    archived_on: Option<String>,
+}
+
+/// Archived workspaces of one project on the archived page.
+struct ArchivedGroup {
+    project_name: String,
+    rows: Vec<ArchivedRow>,
+}
+
+/// Template for the archived workspaces page at GET /archived.
+#[derive(Template)]
+#[template(path = "archived.html")]
+struct ArchivedTemplate {
+    layout: Layout,
+    groups: Vec<ArchivedGroup>,
+}
+
 /// Template for the epic detail page at GET /epics/:id.
 #[derive(Template)]
 #[template(path = "epic_detail.html")]
@@ -2111,6 +2136,74 @@ pub async fn task_detail(
             }
         }
         Ok(None) => (StatusCode::NOT_FOUND, "task not found").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("database error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /archived — Archived workspaces of every project, grouped by project name.
+///
+/// Not scoped per project (always the All scope). Each row has a Restore button handled by
+/// the `data-ws-restore` script (`POST /api/workspaces/:id/restore`).
+pub async fn archived(State(state): State<AppState>, scope: Scope) -> Response {
+    let layout = scope.layout("archived");
+    let archived: Vec<WsInfo> = scope
+        .workspaces
+        .iter()
+        .filter(|w| w.archived)
+        .cloned()
+        .collect();
+
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<ArchivedGroup>, String> {
+        let db = db.lock().unwrap();
+        let counts: std::collections::HashMap<i64, i64> = db
+            .workspace_task_counts()?
+            .into_iter()
+            .filter_map(|c| {
+                c.workspace_id
+                    .map(|id| (id, c.open + c.in_progress + c.blocked))
+            })
+            .collect();
+        let archived_at: std::collections::HashMap<i64, String> = db
+            .list_workspaces()?
+            .into_iter()
+            .filter_map(|w| {
+                w.archived_at
+                    .map(|t| (w.id, t.format("%Y-%m-%d").to_string()))
+            })
+            .collect();
+        // Ordered by project name then id, then workspace name.
+        let mut groups: std::collections::BTreeMap<(String, i64), Vec<ArchivedRow>> =
+            std::collections::BTreeMap::new();
+        for w in archived {
+            groups
+                .entry((w.project_name, w.project_id))
+                .or_default()
+                .push(ArchivedRow {
+                    id: w.id,
+                    open: counts.get(&w.id).copied().unwrap_or(0),
+                    archived_on: archived_at.get(&w.id).cloned(),
+                    name: w.name,
+                    path: w.path,
+                });
+        }
+        Ok(groups
+            .into_iter()
+            .map(|((project_name, _), mut rows)| {
+                rows.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+                ArchivedGroup { project_name, rows }
+            })
+            .collect())
+    })
+    .await
+    .unwrap();
+
+    match result {
+        Ok(groups) => render_template(ArchivedTemplate { layout, groups }),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("database error: {e}"),

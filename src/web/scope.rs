@@ -90,25 +90,15 @@ pub struct SidebarProject {
     pub workspaces: Vec<SidebarWorkspace>,
 }
 
-/// One archived workspace in the sidebar's collapsed "Archived" group.
-#[derive(Debug, Clone)]
-pub struct SidebarArchived {
-    pub id: i64,
-    pub name: String,
-    pub project_name: String,
-    pub path: String,
-    /// Tasks that are not done (they stay hidden until the workspace is restored).
-    pub open: i64,
-}
-
 /// Sidebar contents: the "All" entry, every project with its visible workspaces and the
-/// archived workspaces.
+/// number of archived workspaces (listed on the `/archived` page).
 #[derive(Debug, Clone)]
 pub struct Sidebar {
     pub all_active: bool,
     pub all_open: i64,
     pub projects: Vec<SidebarProject>,
-    pub archived: Vec<SidebarArchived>,
+    /// Archived workspaces of every project; the sidebar links to `/archived` when > 0.
+    pub archived_count: usize,
 }
 
 /// The scope header shown above the content: `project / workspace` or "All projects".
@@ -309,9 +299,9 @@ fn load_workspaces(
 }
 
 /// Build the sidebar tree with non-done task counts and the active scope highlighted.
-/// Archived workspaces are left out of the tree and of every count; they are listed
-/// separately. Projects whose workspaces are all archived are hidden unless active or
-/// they have backlog tasks. Every shown project gets a "Backlog" entry, also with a
+/// Archived workspaces are left out of the tree and of every count; only their number is
+/// kept (the `/archived` page lists them). Projects whose workspaces are all archived are
+/// hidden unless active or they have backlog tasks. Every shown project gets a "Backlog" entry, also with a
 /// count of 0: the entry is the way to reach an empty backlog and create tasks in it,
 /// and a stable layout beats hiding it.
 fn build_sidebar(
@@ -383,22 +373,11 @@ fn build_sidebar(
         }
         sidebar_projects.push(sp);
     }
-    let archived = workspaces
-        .iter()
-        .filter(|w| w.archived)
-        .map(|w| SidebarArchived {
-            id: w.id,
-            name: w.name.clone(),
-            project_name: w.project_name.clone(),
-            path: w.path.clone(),
-            open: open_of(w.id),
-        })
-        .collect();
     Ok(Sidebar {
         all_active: project_id.is_none() && workspace_id.is_none(),
         all_open,
         projects: sidebar_projects,
-        archived,
+        archived_count: archived_ids.len(),
     })
 }
 
@@ -658,6 +637,8 @@ mod tests {
         assert_eq!(by("b-backlog-only").open, 1);
         assert_eq!(sb.all_open, 2);
         assert!(sb.all_active && sb.projects.iter().all(|p| !p.backlog_active));
+        // Only the number of archived workspaces is kept, across every project.
+        assert_eq!(sb.archived_count, 2);
 
         // Backlog scope highlights only the backlog entry; project scope only the project.
         let sb = build_sidebar(&db, &projects, &workspaces, Some(p_only.id), None, true).unwrap();

@@ -71,20 +71,23 @@ Feature: Auto-archive of removed workspaces
     When I run tk "--json workspaces" in "B"
     Then the workspaces JSON row for "A" has "archived_at" equal to "null"
 
-  Scenario: the web sidebar moves a removed all-done workspace into the Archived group
+  Scenario: the web sidebar replaces a removed all-done workspace with a link to the archived page
     Given I run tk "--json create 'Alpha done'" in "A" and save the id as "a1"
     And I run tk "close @id(a1)" in "A"
     And the web server is running
     When I GET resolved "/board"
     Then the sidebar lists workspace "A"
-    And the response body does not contain "Archived"
+    And the response body does not contain "Archived workspaces"
     When I remove the directory "A"
     And I GET resolved "/board"
     Then the response status is 200
-    And the response body contains "Archived"
+    And the response body contains "Archived workspaces"
     And the response body does not contain resolved 'data-scope-prefix="/p/@project(A)/w/@workspace(A)"'
-    And the response body contains resolved 'data-ws-restore="@workspace(A)"'
+    And the response body does not contain "data-ws-restore"
     And the sidebar lists workspace "B"
+    When I GET "/archived"
+    Then the response status is 200
+    And the response body contains resolved 'data-ws-restore="@workspace(A)"'
 
   Scenario: GET /api/workspaces archives a removed all-done workspace
     Given I run tk "--json create 'Alpha done'" in "A" and save the id as "a1"

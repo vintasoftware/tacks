@@ -35,7 +35,7 @@ across projects and workspaces, and who leaves feedback in comments.
 ```
 
 - Top bar spans the full width. The brand aligns with the sidebar's left edge.
-  Nav tabs follow the brand. "New issue" (primary) and the theme toggle (sun /
+  Nav tabs (Board, Issues, Epics) follow the brand. "New issue" (primary) and the theme toggle (sun /
   moon icon button with aria-label) sit at the right.
 - Sidebar: fixed width (~240px), sticky, scrolls on its own. Project rows are
   headings; workspace rows are indented. Counts are right-aligned and muted.
@@ -120,9 +120,10 @@ menu on the workspace row in the sidebar):
   back automatically when a task is created there (`tk create`) or a task is
   moved there (`tk update --move-to`); merely running `tk` in the directory does
   not restore it.
-- **Restore workspace**: archived workspaces are listed in a collapsed
-  "Archived" group at the bottom of the sidebar (with a count). Each has a
-  "Restore" action. Restoring brings the workspace and all its tasks back
+- **Restore workspace**: archived workspaces are listed on the `/archived`
+  page, grouped by project. The page is reached by a small muted "Archived
+  workspaces (N)" link at the bottom of the sidebar, shown only when N > 0.
+  Each row has a "Restore" action. Restoring brings the workspace and all its tasks back
   exactly as they were (same status, assignee, notes, comments), because
   archiving never changed them.
 - **Auto-archive**: when a workspace's path no longer exists and all its tasks
@@ -185,7 +186,7 @@ task detail layout, epics progress and the create modal fields.
   `#ws-dialog` (filled by `app.js`, workspace names set via `textContent`). The
   dialog fetches `GET /api/workspaces/{id}` for the live open count. Close-all
   uses reason `done`, an optional comment (author `user`), then reloads. Remove
-  archives and navigates to `<project>/board`. Restore (sidebar) reloads the page.
+  archives and navigates to `<project>/board`. Restore (`/archived` page) reloads the page.
   Not done: the per-row menu in the sidebar (the header menu covers it).
 - **Archived handling in the web UI.** Web scopes use `AllVisible` /
   `ProjectVisible`. `/p/{pid}/w/{wid}/...` of an archived workspace is 404. The

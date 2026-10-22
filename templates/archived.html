@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Archived workspaces — Tacks{% endblock %}
+
+{% block content %}
+<div id="content-area" class="archived-page">
+  <h2 class="archived-title">Archived workspaces</h2>
+  {% if groups.is_empty() %}
+  <p class="archived-empty">No archived workspaces.</p>
+  {% else %}
+  <p class="archived-hint">Archived workspaces and their tasks are hidden from boards, lists, epics and counts. Restore one to bring it back.</p>
+  {% for g in groups.iter() %}
+  <section class="archived-group">
+    <h3 class="archived-project">{{ g.project_name }}</h3>
+    <ul class="archived-list">
+      {% for r in g.rows.iter() %}
+      <li class="archived-row">
+        <div class="archived-info">
+          <strong class="archived-name">{{ r.name }}</strong>
+          <span class="archived-path">{{ r.path }}</span>
+        </div>
+        <span class="archived-meta">{{ r.open }} open{% if let Some(d) = r.archived_on.as_deref() %} · archived {{ d }}{% endif %}</span>
+        <button type="button" class="archived-restore secondary outline" data-ws-restore="{{ r.id }}" data-ws-name="{{ r.name }}" aria-label="Restore workspace {{ r.name }}">Restore</button>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

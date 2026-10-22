@@ -1959,41 +1959,70 @@ main.view-epics {
   color: var(--pico-del-color, #b91c1c);
 }
 
-/* Archived workspaces: collapsed group at the bottom of the sidebar */
-.scope-archived {
+/* Archived workspaces: small muted link at the bottom of the sidebar, and its page */
+.scope-archived-link {
+  display: block;
   margin: 16px 0 0;
-  padding-top: 8px;
+  padding: 8px 8px 0;
   border-top: 1px solid var(--pico-muted-border-color);
+  font-size: 0.8125rem;
+  color: var(--pico-muted-color);
+  text-decoration: none;
 }
 
-.scope-archived > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  margin: 0;
+.scope-archived-link:hover { text-decoration: underline; }
+
+.archived-page { max-width: 760px; }
+.archived-title { margin-bottom: 8px; }
+.archived-hint,
+.archived-empty,
+.archived-meta,
+.archived-path {
   color: var(--pico-muted-color);
 }
 
-.scope-archived > summary::after { margin-left: 0; float: none; }
-.scope-archived > summary .scope-count { margin-left: 0; }
-
-.scope-archived-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 8px;
-  color: var(--pico-muted-color);
+.archived-project {
+  margin: 24px 0 8px;
+  font-size: 1rem;
 }
 
-.scope-archived-item .scope-name { flex: 1; }
-
-.scope-restore {
-  min-height: 24px;
+.archived-list {
+  list-style: none;
   margin: 0;
-  padding: 0 8px;
+  padding: 0;
+}
+
+.archived-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.archived-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.archived-path {
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.archived-meta {
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.archived-restore {
+  margin: 0;
+  padding: 2px 12px;
   width: auto;
-  font-size: 12px;
+  font-size: 0.8125rem;
 }
 
 .ws-badge {

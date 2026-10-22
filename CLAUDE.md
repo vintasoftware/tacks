@@ -80,7 +80,7 @@ Tacks has downstream consumers (e.g., [Tackline](https://github.com/steveyegge/t
 ```bash
 cargo build              # Debug build
 cargo build --release    # Release build
-cargo test --test bdd    # Run BDD scenarios (713 scenarios, 7797 steps)
+cargo test --test bdd    # Run BDD scenarios (722 scenarios, 7913 steps)
 cargo clippy             # Lint
 cargo fmt --check        # Format check
 ```
