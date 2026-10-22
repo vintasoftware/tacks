@@ -63,15 +63,15 @@
   </div>
   {% if view == "board" %}
   <div class="filter-multiselect filter-singleselect" id="epic-done-since-multiselect">
-    <div class="filter-multiselect-trigger" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="Filter done tasks by time range">
+    <div class="filter-multiselect-trigger" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="Show done tasks closed in this period (other columns always show every task)" title="Show done tasks closed in this period (other columns always show every task)">
       <span class="filter-multiselect-pills"></span>
-      <span class="filter-multiselect-placeholder">{% if done_since == "3d" %}3 days{% elif done_since == "7d" %}7 days{% elif done_since == "30d" %}30 days{% elif done_since == "all" %}All time{% else %}All time{% endif %}</span>
+      <span class="filter-multiselect-placeholder">{% if done_since == "3d" %}Done: last 3 days{% elif done_since == "7d" %}Done: last 7 days{% elif done_since == "30d" %}Done: last 30 days{% elif done_since == "all" %}Done: all time{% else %}Done: all time{% endif %}</span>
     </div>
     <ul class="filter-multiselect-dropdown" role="listbox" aria-multiselectable="false" hidden>
-      <li role="option" data-value="3d" data-label="3 days"><span>3 days</span></li>
-      <li role="option" data-value="7d" data-label="7 days"><span>7 days</span></li>
-      <li role="option" data-value="30d" data-label="30 days"><span>30 days</span></li>
-      <li role="option" data-value="all" data-label="All time"><span>All time</span></li>
+      <li role="option" data-value="3d" data-label="Done: last 3 days"><span>Last 3 days</span></li>
+      <li role="option" data-value="7d" data-label="Done: last 7 days"><span>Last 7 days</span></li>
+      <li role="option" data-value="30d" data-label="Done: last 30 days"><span>Last 30 days</span></li>
+      <li role="option" data-value="all" data-label="Done: all time"><span>All time</span></li>
     </ul>
     <input type="hidden" name="done_since" id="epic-done-since-select" value="{{ done_since }}"
            hx-get="{{ layout.prefix }}/epics/{{ task.id }}"

@@ -98,3 +98,18 @@ Feature: Board done column filtering by done_since
     When I GET the API task "stats-epic"
     Then the response status is 200
     And the response JSON field "status" equals "done"
+
+  # ---------------------------------------------------------------------------
+  # Filter labels
+  # ---------------------------------------------------------------------------
+
+  Scenario: the board labels the default done filter as last 3 days
+    When I GET "/board"
+    Then the response status is 200
+    And the response body contains "Done: last 3 days"
+    And the response body does not contain "Done: all time</span>"
+
+  Scenario: the board labels done_since=all as all time
+    When I GET "/board?done_since=all"
+    Then the response status is 200
+    And the response body contains "Done: all time"
